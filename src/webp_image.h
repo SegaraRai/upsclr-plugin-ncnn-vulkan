@@ -7,8 +7,7 @@
 #include "webp/decode.h"
 #include "webp/encode.h"
 
-unsigned char* webp_load(const unsigned char* buffer, int len, int* w, int* h, int* c)
-{
+unsigned char* webp_load(const unsigned char* buffer, int len, int* w, int* h, int* c) {
     unsigned char* pixeldata = 0;
 
     WebPDecoderConfig config;
@@ -34,8 +33,7 @@ unsigned char* webp_load(const unsigned char* buffer, int len, int* w, int* h, i
     config.output.u.RGBA.rgba = pixeldata;
     config.output.is_external_memory = 1;
 
-    if (WebPDecode(buffer, len, &config) != VP8_STATUS_OK)
-    {
+    if (WebPDecode(buffer, len, &config) != VP8_STATUS_OK) {
         free(pixeldata);
         return NULL;
     }
@@ -60,24 +58,19 @@ int webp_save(const char* filepath, int w, int h, int c, const unsigned char* pi
 
     FILE* fp = 0;
 
-    if (c == 3)
-    {
+    if (c == 3) {
 #if _WIN32
         length = WebPEncodeLosslessBGR(pixeldata, w, h, w * 3, &output);
 #else
         length = WebPEncodeLosslessRGB(pixeldata, w, h, w * 3, &output);
 #endif
-    }
-    else if (c == 4)
-    {
+    } else if (c == 4) {
 #if _WIN32
         length = WebPEncodeLosslessBGRA(pixeldata, w, h, w * 4, &output);
 #else
         length = WebPEncodeLosslessRGBA(pixeldata, w, h, w * 4, &output);
 #endif
-    }
-    else
-    {
+    } else {
         // unsupported channel type
     }
 
@@ -97,10 +90,12 @@ int webp_save(const char* filepath, int w, int h, int c, const unsigned char* pi
     ret = 1;
 
 RETURN:
-    if (output) WebPFree(output);
-    if (fp) fclose(fp);
+    if (output)
+        WebPFree(output);
+    if (fp)
+        fclose(fp);
 
     return ret;
 }
 
-#endif // WEBP_IMAGE_H
+#endif  // WEBP_IMAGE_H

@@ -6,13 +6,12 @@
 #include <string>
 
 // ncnn
-#include "net.h"
 #include "gpu.h"
 #include "layer.h"
+#include "net.h"
 
-class RealESRGAN
-{
-public:
+class RealESRGAN {
+   public:
     RealESRGAN(int gpuid, bool tta_mode = false);
     ~RealESRGAN();
 
@@ -24,13 +23,13 @@ public:
 
     int process(const ncnn::Mat& inimage, ncnn::Mat& outimage) const;
 
-public:
+   public:
     // realesrgan parameters
     int scale;
     int tilesize;
     int prepadding;
 
-private:
+   private:
     ncnn::Net net;
     ncnn::Pipeline* realesrgan_preproc;
     ncnn::Pipeline* realesrgan_postproc;
@@ -40,4 +39,4 @@ private:
     bool tta_mode;
 };
 
-#endif // REALESRGAN_H
+#endif  // REALESRGAN_H

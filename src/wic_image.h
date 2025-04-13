@@ -4,8 +4,7 @@
 // image decoder and encoder with WIC
 #include <wincodec.h>
 
-unsigned char* wic_decode_image(const wchar_t* filepath, int* w, int* h, int* c)
-{
+unsigned char* wic_decode_image(const wchar_t* filepath, int* w, int* h, int* c) {
     IWICImagingFactory* factory = 0;
     IWICBitmapDecoder* decoder = 0;
     IWICBitmapFrameDecode* frame = 0;
@@ -66,8 +65,7 @@ unsigned char* wic_decode_image(const wchar_t* filepath, int* w, int* h, int* c)
     if (!bgrdata)
         goto RETURN;
 
-    for (int y = 0; y < height; y++)
-    {
+    for (int y = 0; y < height; y++) {
         const unsigned char* ptr = data + y * stride;
         unsigned char* bgrptr = bgrdata + y * width * channels;
         memcpy(bgrptr, ptr, width * channels);
@@ -78,18 +76,23 @@ unsigned char* wic_decode_image(const wchar_t* filepath, int* w, int* h, int* c)
     *c = channels;
 
 RETURN:
-    if (lock) lock->Release();
-    if (bitmap) bitmap->Release();
-    if (decoder) decoder->Release();
-    if (frame) frame->Release();
-    if (converter) converter->Release();
-    if (factory) factory->Release();
+    if (lock)
+        lock->Release();
+    if (bitmap)
+        bitmap->Release();
+    if (decoder)
+        decoder->Release();
+    if (frame)
+        frame->Release();
+    if (converter)
+        converter->Release();
+    if (factory)
+        factory->Release();
 
     return bgrdata;
 }
 
-int wic_encode_image(const wchar_t* filepath, int w, int h, int c, void* bgrdata)
-{
+int wic_encode_image(const wchar_t* filepath, int w, int h, int c, void* bgrdata) {
     IWICImagingFactory* factory = 0;
     IWICStream* stream = 0;
     IWICBitmapEncoder* encoder = 0;
@@ -133,8 +136,7 @@ int wic_encode_image(const wchar_t* filepath, int w, int h, int c, void* bgrdata
     if (!data)
         goto RETURN;
 
-    for (int y = 0; y < h; y++)
-    {
+    for (int y = 0; y < h; y++) {
         const unsigned char* bgrptr = (const unsigned char*)bgrdata + y * w * c;
         unsigned char* ptr = data + y * stride;
         memcpy(ptr, bgrptr, w * c);
@@ -152,17 +154,21 @@ int wic_encode_image(const wchar_t* filepath, int w, int h, int c, void* bgrdata
     ret = 1;
 
 RETURN:
-    if (data) free(data);
-    if (encoder) encoder->Release();
-    if (frame) frame->Release();
-    if (stream) stream->Release();
-    if (factory) factory->Release();
+    if (data)
+        free(data);
+    if (encoder)
+        encoder->Release();
+    if (frame)
+        frame->Release();
+    if (stream)
+        stream->Release();
+    if (factory)
+        factory->Release();
 
     return ret;
 }
 
-int wic_encode_jpeg_image(const wchar_t* filepath, int w, int h, int c, void* bgrdata)
-{
+int wic_encode_jpeg_image(const wchar_t* filepath, int w, int h, int c, void* bgrdata) {
     // assert c == 3
 
     IWICImagingFactory* factory = 0;
@@ -221,8 +227,7 @@ int wic_encode_jpeg_image(const wchar_t* filepath, int w, int h, int c, void* bg
     if (!data)
         goto RETURN;
 
-    for (int y = 0; y < h; y++)
-    {
+    for (int y = 0; y < h; y++) {
         const unsigned char* bgrptr = (const unsigned char*)bgrdata + y * w * c;
         unsigned char* ptr = data + y * stride;
         memcpy(ptr, bgrptr, w * c);
@@ -240,14 +245,20 @@ int wic_encode_jpeg_image(const wchar_t* filepath, int w, int h, int c, void* bg
     ret = 1;
 
 RETURN:
-    if (data) free(data);
-    if (encoder) encoder->Release();
-    if (frame) frame->Release();
-    if (propertybag) propertybag->Release();
-    if (stream) stream->Release();
-    if (factory) factory->Release();
+    if (data)
+        free(data);
+    if (encoder)
+        encoder->Release();
+    if (frame)
+        frame->Release();
+    if (propertybag)
+        propertybag->Release();
+    if (stream)
+        stream->Release();
+    if (factory)
+        factory->Release();
 
     return ret;
 }
 
-#endif // WIC_IMAGE_H
+#endif  // WIC_IMAGE_H
