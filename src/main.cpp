@@ -700,8 +700,8 @@ int main(int argc, char** argv)
 
     if (modelname == PATHSTR("realesr-animevideov3"))
     {
-        swprintf(parampath, 256, L"%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_string(scale));
-        swprintf(modelpath, 256, L"%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_string(scale));
+        swprintf(parampath, 256, L"%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_wstring(scale).c_str());
+        swprintf(modelpath, 256, L"%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_wstring(scale).c_str());
     }
     else{
         swprintf(parampath, 256, L"%s/%s.param", model.c_str(), modelname.c_str());
