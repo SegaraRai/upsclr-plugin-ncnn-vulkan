@@ -16,7 +16,7 @@ unsigned char* wic_decode_image(const wchar_t* filepath, int* w, int* h, int* c)
     int width = 0;
     int height = 0;
     int channels = 0;
-    WICRect rect = { 0, 0, 0, 0 };
+    WICRect rect = {};
     unsigned int datasize = 0;
     unsigned char* data = 0;
     int stride = 0;
@@ -175,8 +175,10 @@ int wic_encode_jpeg_image(const wchar_t* filepath, int w, int h, int c, void* bg
     unsigned char* data = 0;
     int ret = 0;
 
-    PROPBAG2 option = { 0 };
-    option.pstrName = L"ImageQuality";
+    wchar_t qualityName[] = L"ImageQuality";
+
+    PROPBAG2 option = {};
+    option.pstrName = qualityName;
     VARIANT varValue;
     VariantInit(&varValue);
     varValue.vt = VT_R4;
