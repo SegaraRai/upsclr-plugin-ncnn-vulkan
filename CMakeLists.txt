@@ -1,9 +1,5 @@
 cmake_minimum_required(VERSION 4.0)
 
-cmake_policy(SET CMP0091 NEW)
-set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-
 # -------------- Support C++17 for using filesystem  ------------------#
 # https://cmake.org/cmake/help/latest/prop_tgt/CXX_STANDARD.html
 set(CMAKE_CXX_STANDARD 17)
@@ -146,4 +142,3 @@ endif()
 if(OPENMP_FOUND)
     target_link_libraries(realesrgan-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
 endif()
-
