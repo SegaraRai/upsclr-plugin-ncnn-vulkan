@@ -110,32 +110,14 @@ SuperResolutionEngine::SuperResolutionEngine(const SuperResolutionEngineConfig& 
     : config(_config),
       vkdev(config.gpuid >= 0 ? ncnn::get_gpu_device(config.gpuid) : nullptr),
       net_cache([this](int scale) {
-          printf("SuperResolutionEngine::net_cache lambda: scale=%d, vkdev=%p\n", scale, this->vkdev);
           auto net = this->create_net(scale, this->net_cache);
           if (net == nullptr) {
               fprintf(stderr, "ERROR: create_net returned nullptr for scale=%d\n", scale);
               return std::shared_ptr<ncnn::Net>();
           }
-
-          // Set network options
-          this->prepare_net_options(net->opt);
-
-          // Set Vulkan device if available
-          if (this->vkdev != nullptr) {
-              printf("Setting vulkan device for net: vkdev=%p\n", this->vkdev);
-              net->set_vulkan_device(this->vkdev);
-          } else {
-              fprintf(stderr, "WARNING: vkdev is nullptr, not setting vulkan device for net\n");
-          }
-
-          printf("Creating net scale=%d, num_threads=%d, use_vulkan_compute=%d\n",
-                 scale, net->opt.num_threads, net->opt.use_vulkan_compute ? 1 : 0);
-
           return net;
       }),
       pipeline_cache([this](int scale) {
-          printf("Creating pipelines scale=%d\n", scale);
-
           auto pipelines = this->create_pipelines(scale, this->pipeline_cache);
           if (pipelines == nullptr) {
               fprintf(stderr, "ERROR: create_pipelines returned nullptr for scale=%d\n", scale);
@@ -147,7 +129,6 @@ SuperResolutionEngine::SuperResolutionEngine(const SuperResolutionEngineConfig& 
       bicubic_layers(this->vkdev, ([this]() {
                          ncnn::Option opt;
                          this->prepare_net_options(opt);
-                         printf("Creating bicubic layers, num_threads=%d\n", opt.num_threads);
                          return opt;
                      })()) {
 }
@@ -160,16 +141,21 @@ SuperResolutionEngine::~SuperResolutionEngine() {
 
 int SuperResolutionEngine::process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const {
     if (vkdev != nullptr) {
-        printf("Using GPU processing\n");
         return this->process_gpu(in, config.input_format, out, config.output_format, config);
     } else {
-        printf("Using CPU processing\n");
         return this->process_cpu(in, config.input_format, out, config.output_format, config);
     }
 }
 
 ProcessConfig SuperResolutionEngine::create_default_process_config() const {
     return ProcessConfig();
+}
+
+std::shared_ptr<ncnn::Net> SuperResolutionEngine::create_net_base() const {
+    auto net = std::make_shared<ncnn::Net>();
+    this->prepare_net_options(net->opt);
+    net->set_vulkan_device(this->vkdev);
+    return net;
 }
 
 int SuperResolutionEngine::process_cpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {

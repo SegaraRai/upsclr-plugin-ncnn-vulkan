@@ -138,6 +138,7 @@ class SuperResolutionEngine {
     BicubicLayers bicubic_layers;
 
     // Protected utility methods
+    virtual std::shared_ptr<ncnn::Net> create_net_base() const;
     virtual std::shared_ptr<ncnn::Net> create_net(int scale, const NetCache& net_cache) const = 0;
     virtual std::shared_ptr<SuperResolutionPipelines> create_pipelines(int scale, const PipelineCache& pipeline_cache) const = 0;
 

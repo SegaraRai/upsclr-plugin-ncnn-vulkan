@@ -121,7 +121,6 @@ void RealESRGAN::prepare_net_options(ncnn::Option& options) const {
     SuperResolutionEngine::prepare_net_options(options);
 
     // Set network options
-    options.use_vulkan_compute = this->vkdev != nullptr;
     options.use_fp16_packed = true;
     options.use_fp16_storage = true;
     options.use_fp16_arithmetic = false;
@@ -131,18 +130,21 @@ void RealESRGAN::prepare_net_options(ncnn::Option& options) const {
 
 std::shared_ptr<ncnn::Net> RealESRGAN::create_net(int scale, const NetCache& net_cache) const {
     std::string basename;
-
     if (this->config.model == "realesr-animevideov3") {
+        // For `realesr-animevideov3`, the model depends on the scale
         basename = std::format("{}-x{}", this->config.model, scale);
     } else {
+        // For other models, the scale is not part of the model name
+        // Use scale 1 for the representative model for convenience
         if (scale != 1) {
+            // Reuse the cached model for other scales
             return net_cache.get_net(1);
         }
 
         basename = this->config.model;
     }
 
-    auto net = std::make_shared<ncnn::Net>();
+    auto net = this->create_net_base();
     this->net_load_model_and_param(*net, this->config.model_dir / (basename + ".param"));
 
     return net;
@@ -366,7 +368,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
                 .y1 = tile_y1,
             };
 
-            printf("Processing tile [%d, %d] (%d, %d) -> (%d, %d) | (%d / %d, %d / %d)\n", xi, yi, tile.x0, tile.y0, tile.x1, tile.y1, tile.w_nopad, TILE_SIZE_X, tile.h_nopad, TILE_SIZE_Y);
+            //printf("Processing tile [%d, %d] (%d, %d) -> (%d, %d) | (%d / %d, %d / %d)\n", xi, yi, tile.x0, tile.y0, tile.x1, tile.y1, tile.w_nopad, TILE_SIZE_X, tile.h_nopad, TILE_SIZE_Y);
 
             if (!this->config.tta_mode) {
                 // Standard mode processing
