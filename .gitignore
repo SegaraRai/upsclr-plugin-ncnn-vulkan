@@ -36,3 +36,5 @@ release
 *.exe
 *.out
 *.app
+
+thirdparty

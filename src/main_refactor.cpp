@@ -90,7 +90,7 @@ static std::vector<int> parse_optarg_int_array(const char* optarg) {
 #include "gpu.h"
 #include "platform.h"
 
-#include "realesrgan.h"
+#include "engines/realesrgan/realesrgan_refactor.hpp"
 
 #include "filesystem_utils.h"
 
@@ -120,6 +120,8 @@ class Task {
 
     ncnn::Mat inimage;
     ncnn::Mat outimage;
+
+    ProcessConfig config;
 };
 
 class TaskQueue {
@@ -251,6 +253,21 @@ void* load(void* args) {
             v.inimage = ncnn::Mat(w, h, (void*)pixeldata, (size_t)c, c);
             v.outimage = ncnn::Mat(w * scale, h * scale, (size_t)c, c);
 
+            v.config = ProcessConfig{
+                .scale = scale,
+
+                #if _WIN32
+                .input_format = ColorFormat::BGR,
+                .output_format = ColorFormat::BGR,
+                #else
+                .input_format = ColorFormat::RGB,
+                .output_format = ColorFormat::RGB,
+                #endif
+
+                .tilesize = 200,
+                .prepadding = 10,
+            };
+
             path_t ext = get_file_extension(v.outpath);
             if (c == 4 && (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") || ext == PATHSTR("JPEG"))) {
                 path_t output_filename2 = ltp->output_files[i] + PATHSTR(".png");
@@ -278,11 +295,15 @@ void* load(void* args) {
 class ProcThreadParams {
    public:
     const RealESRGAN* realesrgan;
+    ProcessConfig default_config;
 };
 
 void* proc(void* args) {
     const ProcThreadParams* ptp = (const ProcThreadParams*)args;
     const RealESRGAN* realesrgan = ptp->realesrgan;
+    const auto tilesize = ptp->default_config.tilesize;
+
+    printf("tilesize=%d\n", tilesize);
 
     for (;;) {
         Task v;
@@ -292,7 +313,8 @@ void* proc(void* args) {
         if (v.id == -233)
             break;
 
-        realesrgan->process(v.inimage, v.outimage);
+        v.config.tilesize = tilesize;
+        realesrgan->process(v.inimage, v.outimage, v.config);
 
         tosave.put(v);
     }
@@ -389,7 +411,7 @@ int main(int argc, char** argv)
     int scale = 4;
     std::vector<int> tilesize;
     path_t model = PATHSTR("models");
-    path_t modelname = PATHSTR("realesr-animevideov3");
+    std::string modelname = "realesr-animevideov3";
     std::vector<int> gpuid;
     int jobs_load = 1;
     std::vector<int> jobs_proc;
@@ -419,7 +441,8 @@ int main(int argc, char** argv)
                 model = optarg;
                 break;
             case L'n':
-                modelname = optarg;
+                modelname.resize(wcslen(optarg) + 1);
+                sprintf_s(&modelname[0], modelname.size(), "%ls", optarg);
                 break;
             case L'g':
                 gpuid = parse_optarg_int_array(optarg);
@@ -600,44 +623,6 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    // if (modelname.find(PATHSTR("realesrgan-x4plus")) != path_t::npos
-    //     || modelname.find(PATHSTR("realesrnet-x4plus")) != path_t::npos
-    //     || modelname.find(PATHSTR("esrgan-x4")) != path_t::npos)
-    // {}
-    // else
-    // {
-    //     fprintf(stderr, "unknown model name\n");
-    //     return -1;
-    // }
-
-#if _WIN32
-    wchar_t parampath[256];
-    wchar_t modelpath[256];
-
-    if (modelname == PATHSTR("realesr-animevideov3")) {
-        swprintf(parampath, 256, L"%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_wstring(scale).c_str());
-        swprintf(modelpath, 256, L"%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_wstring(scale).c_str());
-    } else {
-        swprintf(parampath, 256, L"%s/%s.param", model.c_str(), modelname.c_str());
-        swprintf(modelpath, 256, L"%s/%s.bin", model.c_str(), modelname.c_str());
-    }
-
-#else
-    char parampath[256];
-    char modelpath[256];
-
-    if (modelname == PATHSTR("realesr-animevideov3")) {
-        sprintf(parampath, "%s/%s-x%s.param", model.c_str(), modelname.c_str(), std::to_string(scale).c_str());
-        sprintf(modelpath, "%s/%s-x%s.bin", model.c_str(), modelname.c_str(), std::to_string(scale).c_str());
-    } else {
-        sprintf(parampath, "%s/%s.param", model.c_str(), modelname.c_str());
-        sprintf(modelpath, "%s/%s.bin", model.c_str(), modelname.c_str());
-    }
-#endif
-
-    path_t paramfullpath = sanitize_filepath(parampath);
-    path_t modelfullpath = sanitize_filepath(modelpath);
-
 #if _WIN32
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 #endif
@@ -679,36 +664,28 @@ int main(int argc, char** argv)
         total_jobs_proc += jobs_proc[i];
     }
 
-    for (int i = 0; i < use_gpu_count; i++) {
-        if (tilesize[i] != 0)
-            continue;
-
-        uint32_t heap_budget = ncnn::get_gpu_device(gpuid[i])->get_heap_budget();
-
-        // more fine-grained tilesize policy here
-        if (model.find(PATHSTR("models")) != path_t::npos) {
-            if (heap_budget > 1900)
-                tilesize[i] = 200;
-            else if (heap_budget > 550)
-                tilesize[i] = 100;
-            else if (heap_budget > 190)
-                tilesize[i] = 64;
-            else
-                tilesize[i] = 32;
-        }
-    }
-
     {
         std::vector<RealESRGAN*> realesrgan(use_gpu_count);
 
         for (int i = 0; i < use_gpu_count; i++) {
-            realesrgan[i] = new RealESRGAN(gpuid[i], tta_mode);
+            SuperResolutionEngineConfig config{
+                .model_dir = std::filesystem::path(model),
+                .model = modelname,
 
-            realesrgan[i]->load(paramfullpath, modelfullpath);
+                .gpuid = gpuid[i],
+                .tta_mode = tta_mode != 0,
+            };
 
-            realesrgan[i]->scale = scale;
-            realesrgan[i]->tilesize = tilesize[i];
-            realesrgan[i]->prepadding = prepadding;
+            printf("Creating RealESRGAN instance for gpuid=%d, model=%s, model_dir=%s\n",
+                   config.gpuid, config.model.c_str(), config.model_dir.string().c_str());
+
+            realesrgan[i] = new RealESRGAN(config);
+            
+            // Check if the instance was created successfully
+            if (realesrgan[i] == nullptr) {
+                printf("ERROR: Failed to create RealESRGAN instance for gpuid=%d\n", config.gpuid);
+                return -1;
+            }
         }
 
         // main routine
@@ -726,6 +703,7 @@ int main(int argc, char** argv)
             std::vector<ProcThreadParams> ptp(use_gpu_count);
             for (int i = 0; i < use_gpu_count; i++) {
                 ptp[i].realesrgan = realesrgan[i];
+                ptp[i].default_config = realesrgan[i]->create_default_process_config();
             }
 
             std::vector<ncnn::Thread*> proc_threads(total_jobs_proc);

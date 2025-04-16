@@ -10,6 +10,7 @@
       "name": "ncnn",
       "features": ["vulkan"]
     },
-    "stb"
+    "stb",
+    "glaze"
   ]
 }
