@@ -303,8 +303,6 @@ void* proc(void* args) {
     const RealESRGAN* realesrgan = ptp->realesrgan;
     const auto tilesize = ptp->default_config.tilesize;
 
-    printf("tilesize=%d\n", tilesize);
-
     for (;;) {
         Task v;
 

@@ -53,7 +53,6 @@ SuperResolutionPipelines::SuperResolutionPipelines(const ncnn::VulkanDevice* vkd
       preprocess_bgr(vkdev),
       postprocess_rgb(vkdev),
       postprocess_bgr(vkdev) {
-    printf("Initialized pipelines with vkdev=%p\n", vkdev);
 }
 
 //------------------------------------------------------------------------------
