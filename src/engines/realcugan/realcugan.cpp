@@ -1412,19 +1412,11 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
     return std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>>(
         new RealCUGANSyncGapGPU(vkdev, net, pipelines, opt, this->config.tta_mode, in, in_format, config, std::bind(&RealCUGAN::handle_alpha_channel_gpu, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5)),
         [vkdev, blob_vkallocator, staging_vkallocator](RealCUGANSyncGapGPU* ptr) {
-            if (ptr == nullptr) {
-                return;
-            }
-
             delete ptr;
 
             // Reclaim allocators
-            if (blob_vkallocator) {
-                vkdev->reclaim_blob_allocator(blob_vkallocator);
-            }
-            if (staging_vkallocator) {
-                vkdev->reclaim_staging_allocator(staging_vkallocator);
-            }
+            vkdev->reclaim_blob_allocator(blob_vkallocator);
+            vkdev->reclaim_staging_allocator(staging_vkallocator);
         });
 }
 
