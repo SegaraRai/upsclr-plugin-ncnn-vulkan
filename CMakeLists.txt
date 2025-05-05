@@ -94,6 +94,7 @@ compile_shader(realcugan_postproc_tta.comp.glsl)
 compile_shader(realcugan_postproc.comp.glsl)
 compile_shader(realcugan_preproc_tta.comp.glsl)
 compile_shader(realcugan_preproc.comp.glsl)
+
 compile_shader(realesrgan_preproc.comp.glsl)
 compile_shader(realesrgan_postproc.comp.glsl)
 compile_shader(realesrgan_preproc_tta.comp.glsl)
@@ -105,9 +106,8 @@ add_custom_target(generate-spirv DEPENDS ${SHADER_SPV_HEX_FILES})
 add_library(upsclr-ncnn-vulkan-lib SHARED
     src/engines/base.cpp
     src/engines/engine_factory.cpp
-    src/engines/realesrgan/realesrgan_refactor.cpp
+    src/engines/realesrgan/realesrgan.cpp
     src/engines/realcugan/realcugan.cpp
-    #src/realesrgan.cpp
     #src/upscaler_plugin_api.cpp
     #src/upscaler_registry.cpp
     #src/realesrgan_upscaler.cpp
@@ -121,7 +121,7 @@ add_executable(upsclr-ncnn-vulkan
     src/main_refactor.cpp
     src/engines/base.cpp
     src/engines/engine_factory.cpp
-    src/engines/realesrgan/realesrgan_refactor.cpp
+    src/engines/realesrgan/realesrgan.cpp
     src/engines/realcugan/realcugan.cpp
 )
 

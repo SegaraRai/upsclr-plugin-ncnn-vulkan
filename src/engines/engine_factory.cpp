@@ -6,8 +6,8 @@
 
 // Include all engine headers
 #include "realcugan/realcugan.hpp"
-#include "realesrgan/realesrgan_refactor.hpp"
-// #include "waifu2x/waifu2x_refactor.hpp"
+#include "realesrgan/realesrgan.hpp"
+// #include "waifu2x/waifu2x.hpp"
 
 // Helper function to register all engines
 static std::vector<std::string> get_all_engine_names() {

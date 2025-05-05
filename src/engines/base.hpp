@@ -185,7 +185,6 @@ struct SuperResolutionEngineInfo {
     std::vector<std::string> model_names;  // Supported model names
     std::string default_model;             // Default model name
     int default_noise = -1;                // Default noise level
-    int default_scale = 2;                 // Default scale factor
     std::string description;               // Engine description
     std::string version;                   // Engine version
 

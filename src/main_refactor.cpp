@@ -127,8 +127,7 @@ static void print_usage() {
         }
         fprintf(stderr, "\n");
         fprintf(stderr, "    Default model: %s\n", info->default_model.c_str());
-        fprintf(stderr, "    Default scale: %d\n", info->default_scale);
-        if (info->default_noise >= 0) {
+        if (info->supports(SuperResolutionFeatureFlags::NOISE)) {
             fprintf(stderr, "    Default noise: %d\n", info->default_noise);
         }
         fprintf(stderr, "\n");
@@ -269,6 +268,7 @@ void* load(void* args) {
                 free(filedata);
             }
         }
+
         if (pixeldata) {
             Task v;
             v.id = i;
@@ -332,8 +332,9 @@ void* proc(void* args) {
 
         toproc.get(v);
 
-        if (v.id == -233)
+        if (v.id == -233) {
             break;
+        }
 
         v.config.tilesize = tilesize;
         engine->process(v.inimage, v.outimage, v.config);

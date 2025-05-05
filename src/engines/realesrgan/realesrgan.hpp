@@ -1,6 +1,6 @@
 // RealESRGAN implemented with ncnn library - refactored version
-#ifndef REALESRGAN_REFACTOR_HPP
-#define REALESRGAN_REFACTOR_HPP
+#ifndef REALESRGAN_HPP
+#define REALESRGAN_HPP
 
 #include "../base.hpp"
 
@@ -27,7 +27,6 @@ class RealESRGAN final : public SuperResolutionEngine {
                 SuperResolutionScale::X4),
             .model_names = {"realesrgan-x4plus", "realesrnet-x4plus", "realesrgan-x4plus-anime", "realesr-animevideov3"},
             .default_model = "realesrgan-x4plus",
-            .default_scale = 4,
             .description = "Enhanced ESRGAN implementation with pure-CNN architecture",
             .version = "1.0.0"};
         return info;
@@ -47,4 +46,4 @@ class RealESRGAN final : public SuperResolutionEngine {
     int process_cpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const override;
 };
 
-#endif  // REALESRGAN_REFACTOR_HPP
+#endif  // REALESRGAN_HPP

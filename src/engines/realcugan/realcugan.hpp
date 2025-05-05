@@ -1,5 +1,5 @@
-#ifndef REALCUGAN_REFACTOR_HPP
-#define REALCUGAN_REFACTOR_HPP
+#ifndef REALCUGAN_HPP
+#define REALCUGAN_HPP
 
 #include <functional>
 
@@ -33,7 +33,6 @@ class RealCUGAN final : public SuperResolutionEngine {
             .model_names = {"models-se", "models-nose", "models-pro"},
             .default_model = "models-se",
             .default_noise = 0,
-            .default_scale = 2,
             .description = "Real-CUGAN: Real-world Cartoon Image Super-Resolution",
             .version = "1.0.0"};
         return info;
@@ -66,4 +65,4 @@ class RealCUGAN final : public SuperResolutionEngine {
     static std::string get_model_path(const std::string& model_type, int scale, int noise);
 };
 
-#endif  // REALCUGAN_REFACTOR_HPP
+#endif  // REALCUGAN_HPP

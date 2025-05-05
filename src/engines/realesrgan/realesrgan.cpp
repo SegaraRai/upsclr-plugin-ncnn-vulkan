@@ -1,4 +1,4 @@
-#include "realesrgan_refactor.hpp"
+#include "realesrgan.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -118,7 +118,7 @@ ProcessConfig RealESRGAN::create_default_process_config() const {
     }
 
     return ProcessConfig{
-        .scale = info.default_scale,
+        .scale = 2,
         .input_format = ColorFormat::RGB,
         .output_format = ColorFormat::RGB,
         .tilesize = tilesize,
