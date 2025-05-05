@@ -1,11 +1,12 @@
-// realesrgan implemented with ncnn library
-#include <stdio.h>
 #include <algorithm>
+#include <chrono>
 #include <clocale>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <queue>
 #include <vector>
+
 namespace fs = std::filesystem;
 
 #if _WIN32
@@ -138,6 +139,8 @@ class Task {
    public:
     int id;
     int webp;
+
+    std::chrono::microseconds elapsed;
 
     path_t inpath;
     path_t outpath;
@@ -319,6 +322,7 @@ void* load(void* args) {
 class ProcThreadParams {
    public:
     const SuperResolutionEngine* engine;
+    std::atomic<long long>* total_elapsed;
     ProcessConfig default_config;
 };
 
@@ -337,7 +341,14 @@ void* proc(void* args) {
         }
 
         v.config.tilesize = tilesize;
+
+        const auto tp_begin = std::chrono::steady_clock::now();
         engine->process(v.inimage, v.outimage, v.config);
+        const auto tp_end = std::chrono::steady_clock::now();
+
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(tp_end - tp_begin);
+        v.elapsed = elapsed;
+        ptp->total_elapsed->fetch_add(elapsed.count() * 1'000'000 / (v.inimage.w * v.inimage.h));
 
         tosave.put(v);
     }
@@ -359,8 +370,9 @@ void* save(void* args) {
 
         tosave.get(v);
 
-        if (v.id == -233)
+        if (v.id == -233) {
             break;
+        }
 
         // free input pixel data
         {
@@ -406,9 +418,9 @@ void* save(void* args) {
         if (success) {
             if (verbose) {
 #if _WIN32
-                fwprintf(stderr, L"%ls -> %ls done\n", v.inpath.c_str(), v.outpath.c_str());
+                fwprintf(stdout, L"%ls -> %ls done, took %lldus\n", v.inpath.c_str(), v.outpath.c_str(), v.elapsed.count());
 #else
-                fprintf(stderr, "%s -> %s done\n", v.inpath.c_str(), v.outpath.c_str());
+                fprintf(stdout, "%s -> %s done, took %lldus\n", v.inpath.c_str(), v.outpath.c_str(), v.elapsed.count());
 #endif
             }
         } else {
@@ -758,6 +770,8 @@ int main(int argc, char** argv)
 
         // main routine
         {
+            std::atomic<long long> total_elapsed(0);
+
             // load image
             LoadThreadParams ltp;
             ltp.scale = scale;
@@ -772,6 +786,7 @@ int main(int argc, char** argv)
             for (int i = 0; i < use_gpu_count; i++) {
                 ptp[i].engine = engines[i].get();
                 ptp[i].default_config = engines[i]->create_default_process_config();
+                ptp[i].total_elapsed = &total_elapsed;
 
                 // Override scale if specified
                 if (scale > 0) {
@@ -826,6 +841,8 @@ int main(int argc, char** argv)
                 save_threads[i]->join();
                 delete save_threads[i];
             }
+
+            printf("Average processing time: %.2fms/MP\n", static_cast<double>(total_elapsed) / 1000 / input_files.size());
         }
 
         engines.clear();
