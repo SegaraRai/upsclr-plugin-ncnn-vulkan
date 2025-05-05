@@ -118,7 +118,7 @@ target_compile_definitions(upsclr-ncnn-vulkan-lib PRIVATE UPSCALER_EXPORTS)
 
 # Add the executable target
 add_executable(upsclr-ncnn-vulkan
-    src/main_refactor.cpp
+    src/main.cpp
     src/engines/base.cpp
     src/engines/engine_factory.cpp
     src/engines/realesrgan/realesrgan.cpp
