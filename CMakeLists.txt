@@ -20,10 +20,10 @@ else()
 endif()
 
 macro(compile_shader SHADER_SRC)
-    set(SHADER_SRC_FULLPATH ${CMAKE_CURRENT_SOURCE_DIR}/src/${SHADER_SRC})
+    set(SHADER_SRC_FULLPATH ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/${SHADER_SRC})
 
     get_filename_component(SHADER_SRC_NAME_WE ${SHADER_SRC} NAME_WE)
-    set(SHADER_SPV_HEX_FILE ${CMAKE_CURRENT_BINARY_DIR}/${SHADER_SRC_NAME_WE}.spv.hex.h)
+    set(SHADER_SPV_HEX_FILE ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER_SRC_NAME_WE}.spv.hex.h)
     add_custom_command(
         OUTPUT ${SHADER_SPV_HEX_FILE}
         COMMAND ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}
@@ -38,7 +38,7 @@ macro(compile_shader SHADER_SRC)
     # fp16 storage
     set(SHADER_fp16s_SRC_NAME_WE "${SHADER_SRC_NAME_WE}_fp16s")
 
-    set(SHADER_fp16s_SPV_HEX_FILE ${CMAKE_CURRENT_BINARY_DIR}/${SHADER_fp16s_SRC_NAME_WE}.spv.hex.h)
+    set(SHADER_fp16s_SPV_HEX_FILE ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER_fp16s_SRC_NAME_WE}.spv.hex.h)
     add_custom_command(
         OUTPUT ${SHADER_fp16s_SPV_HEX_FILE}
         COMMAND ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}
@@ -53,7 +53,7 @@ macro(compile_shader SHADER_SRC)
     # int8 storage
     set(SHADER_int8s_SRC_NAME_WE "${SHADER_SRC_NAME_WE}_int8s")
 
-    set(SHADER_int8s_SPV_HEX_FILE ${CMAKE_CURRENT_BINARY_DIR}/${SHADER_int8s_SRC_NAME_WE}.spv.hex.h)
+    set(SHADER_int8s_SPV_HEX_FILE ${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER_int8s_SRC_NAME_WE}.spv.hex.h)
     add_custom_command(
         OUTPUT ${SHADER_int8s_SPV_HEX_FILE}
         COMMAND ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}
@@ -88,6 +88,12 @@ endif()
 # look for vulkan compute shader and compile
 set(SHADER_SPV_HEX_FILES)
 
+compile_shader(realcugan_4x_postproc_tta.comp.glsl)
+compile_shader(realcugan_4x_postproc.comp.glsl)
+compile_shader(realcugan_postproc_tta.comp.glsl)
+compile_shader(realcugan_postproc.comp.glsl)
+compile_shader(realcugan_preproc_tta.comp.glsl)
+compile_shader(realcugan_preproc.comp.glsl)
 compile_shader(realesrgan_preproc.comp.glsl)
 compile_shader(realesrgan_postproc.comp.glsl)
 compile_shader(realesrgan_preproc_tta.comp.glsl)
@@ -96,9 +102,11 @@ compile_shader(realesrgan_postproc_tta.comp.glsl)
 add_custom_target(generate-spirv DEPENDS ${SHADER_SPV_HEX_FILES})
 
 # Add the library target for the plugin
-add_library(realesrgan-lib SHARED
+add_library(upsclr-ncnn-vulkan-lib SHARED
     src/engines/base.cpp
+    src/engines/engine_factory.cpp
     src/engines/realesrgan/realesrgan_refactor.cpp
+    src/engines/realcugan/realcugan.cpp
     #src/realesrgan.cpp
     #src/upscaler_plugin_api.cpp
     #src/upscaler_registry.cpp
@@ -106,44 +114,33 @@ add_library(realesrgan-lib SHARED
 )
 
 # Set export macro for the library
-target_compile_definitions(realesrgan-lib PRIVATE UPSCALER_EXPORTS)
+target_compile_definitions(upsclr-ncnn-vulkan-lib PRIVATE UPSCALER_EXPORTS)
 
 # Add the executable target
-add_executable(realesrgan-ncnn-vulkan-refactor
+add_executable(upsclr-ncnn-vulkan
     src/main_refactor.cpp
     src/engines/base.cpp
+    src/engines/engine_factory.cpp
     src/engines/realesrgan/realesrgan_refactor.cpp
-)
-
-# Add the executable target
-add_executable(realesrgan-ncnn-vulkan
-    src/main.cpp
-    src/realesrgan.cpp
+    src/engines/realcugan/realcugan.cpp
 )
 
 find_package(Vulkan REQUIRED)
-target_link_libraries(realesrgan-ncnn-vulkan PRIVATE Vulkan::Vulkan)
-target_link_libraries(realesrgan-ncnn-vulkan-refactor PRIVATE Vulkan::Vulkan)
-target_link_libraries(realesrgan-lib PRIVATE Vulkan::Vulkan)
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE Vulkan::Vulkan)
+target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE Vulkan::Vulkan)
 
 find_package(ncnn CONFIG REQUIRED)
-target_link_libraries(realesrgan-ncnn-vulkan PRIVATE ncnn)
-target_link_libraries(realesrgan-ncnn-vulkan-refactor PRIVATE ncnn)
-target_link_libraries(realesrgan-lib PRIVATE ncnn)
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE ncnn)
+target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE ncnn)
 
 find_package(Stb REQUIRED)
-target_include_directories(realesrgan-ncnn-vulkan PRIVATE ${Stb_INCLUDE_DIR})
-target_include_directories(realesrgan-ncnn-vulkan-refactor PRIVATE ${Stb_INCLUDE_DIR})
-target_include_directories(realesrgan-lib PRIVATE ${Stb_INCLUDE_DIR})
+target_include_directories(upsclr-ncnn-vulkan PRIVATE ${Stb_INCLUDE_DIR})
 
 find_package(WebP CONFIG REQUIRED)
-target_link_libraries(realesrgan-ncnn-vulkan PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
-target_link_libraries(realesrgan-ncnn-vulkan-refactor PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
-target_link_libraries(realesrgan-lib PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
 
-add_dependencies(realesrgan-ncnn-vulkan generate-spirv)
-add_dependencies(realesrgan-ncnn-vulkan-refactor generate-spirv)
-add_dependencies(realesrgan-lib generate-spirv)
+add_dependencies(upsclr-ncnn-vulkan generate-spirv)
+add_dependencies(upsclr-ncnn-vulkan-lib generate-spirv)
 
 if(USE_STATIC_MOLTENVK)
     find_library(CoreFoundation NAMES CoreFoundation)
@@ -155,7 +152,7 @@ if(USE_STATIC_MOLTENVK)
     find_library(IOKit NAMES IOKit)
     find_library(IOSurface NAMES IOSurface)
 
-    target_link_libraries(realesrgan-ncnn-vulkan PRIVATE
+    target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE
         ${Metal}
         ${QuartzCore}
         ${CoreGraphics}
@@ -166,18 +163,7 @@ if(USE_STATIC_MOLTENVK)
         ${CoreFoundation}
     )
 
-    target_link_libraries(realesrgan-ncnn-vulkan-refactor PRIVATE
-        ${Metal}
-        ${QuartzCore}
-        ${CoreGraphics}
-        ${Cocoa}
-        ${IOKit}
-        ${IOSurface}
-        ${Foundation}
-        ${CoreFoundation}
-    )
-
-    target_link_libraries(realesrgan-lib PRIVATE
+    target_link_libraries(upsclr-ncnn-vulkan PRIVATE
         ${Metal}
         ${QuartzCore}
         ${CoreGraphics}
@@ -190,14 +176,13 @@ if(USE_STATIC_MOLTENVK)
 endif()
 
 if(OPENMP_FOUND)
-    target_link_libraries(realesrgan-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
-    target_link_libraries(realesrgan-ncnn-vulkan-refactor PRIVATE OpenMP::OpenMP_CXX)
-    target_link_libraries(realesrgan-lib PRIVATE OpenMP::OpenMP_CXX)
+    target_link_libraries(upsclr-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
+    target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
 
 # Install the library
-install(TARGETS realesrgan-lib
+install(TARGETS upsclr-ncnn-vulkan-lib
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
@@ -206,7 +191,7 @@ install(TARGETS realesrgan-lib
 # Install the headers
 install(FILES
     src/upscaler_plugin_api.h
-    DESTINATION include/realesrgan-lib
+    DESTINATION include/upsclr-ncnn-vulkan-lib
 )
 
 # Add examples directory

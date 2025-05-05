@@ -12,9 +12,9 @@
 BicubicLayers::BicubicLayers(ncnn::VulkanDevice* _vkdev, const ncnn::Option& _opt)
     : vkdev(_vkdev), opt(_opt) {
     // Create bicubic layers for scales 2, 3, and 4
-    for (int scale : {2, 3, 4}) {
+    for (const int scale : {2, 3, 4}) {
         ncnn::Layer* layer = ncnn::create_layer("Interp");
-        layer->vkdev = vkdev;
+        layer->vkdev = this->vkdev;
 
         ncnn::ParamDict pd;
         pd.set(0, 3);  // bicubic
@@ -24,14 +24,12 @@ BicubicLayers::BicubicLayers(ncnn::VulkanDevice* _vkdev, const ncnn::Option& _op
 
         layer->create_pipeline(this->opt);
 
-        this->bicubics.emplace(scale, std::shared_ptr<ncnn::Layer>(layer));
-    }
-}
-
-BicubicLayers::~BicubicLayers() {
-    // Destroy all bicubic layers
-    for (auto& pair : this->bicubics) {
-        pair.second->destroy_pipeline(this->opt);
+        this->bicubics.emplace(scale, std::shared_ptr<ncnn::Layer>(layer, [this](ncnn::Layer* l) {
+                                   if (l != nullptr) {
+                                       l->destroy_pipeline(this->opt);
+                                       delete l;
+                                   }
+                               }));
     }
 }
 
@@ -139,7 +137,7 @@ SuperResolutionEngine::~SuperResolutionEngine() {
 }
 
 int SuperResolutionEngine::process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const {
-    if (vkdev != nullptr) {
+    if (this->vkdev != nullptr) {
         return this->process_gpu(in, config.input_format, out, config.output_format, config);
     } else {
         return this->process_cpu(in, config.input_format, out, config.output_format, config);

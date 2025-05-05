@@ -6,7 +6,10 @@
       "inherits": "vcpkg",
       "environment": {
         "VCPKG_ROOT": "F:\\vcpkg"
-      }
+      },
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "toolset": "Clang-CL"
     }
   ]
 }

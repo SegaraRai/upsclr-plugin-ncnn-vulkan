@@ -2,16 +2,220 @@
 #ifndef SUPERRESOLUTION_BASE_HPP
 #define SUPERRESOLUTION_BASE_HPP
 
+#include <bitset>
+#include <concepts>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 
 // ncnn
 #include "gpu.h"
 #include "layer.h"
 #include "net.h"
+
+// Supported scale factors
+enum class SuperResolutionScale {
+    X1 = 0,
+    X2 = 1,
+    X3 = 2,
+    X4 = 3,
+    COUNT = 4
+};
+
+// Engine feature flags
+enum class SuperResolutionFeatureFlags {
+    TTA_MODE = 0,  // TTA mode support
+    NOISE = 1,     // Noise reduction support
+    SYNCGAP = 2,   // SyncGAP support
+    CPU = 3,       // CPU processing support
+    ALPHA = 4,     // Alpha channel processing support
+    TILESIZE = 5,  // Tile size adjustment support
+    COUNT = 6      // Total number of features
+};
+
+// Type-safe bitset for feature flags
+template <typename EnumType>
+concept EnumFlag = std::is_enum_v<EnumType>;
+
+template <EnumFlag E, std::size_t N = static_cast<std::size_t>(E::COUNT)>
+class FeatureFlagSet {
+   private:
+    std::bitset<N> bits;
+
+   public:
+    constexpr FeatureFlagSet() = default;
+
+    constexpr FeatureFlagSet(E flag) {
+        bits.set(static_cast<std::size_t>(flag));
+    }
+
+    template <typename... Args>
+    constexpr FeatureFlagSet(E first, Args... rest) {
+        bits.set(static_cast<std::size_t>(first));
+        if constexpr (sizeof...(rest) > 0) {
+            ((bits.set(static_cast<std::size_t>(rest))), ...);
+        }
+    }
+
+    // Test if a flag is set
+    [[nodiscard]] constexpr bool test(E flag) const {
+        return bits.test(static_cast<std::size_t>(flag));
+    }
+
+    // Set a flag
+    constexpr FeatureFlagSet& set(E flag, bool value = true) {
+        bits.set(static_cast<std::size_t>(flag), value);
+        return *this;
+    }
+
+    // Reset a flag
+    constexpr FeatureFlagSet& reset(E flag) {
+        bits.reset(static_cast<std::size_t>(flag));
+        return *this;
+    }
+
+    // Reset all flags
+    constexpr FeatureFlagSet& reset() {
+        bits.reset();
+        return *this;
+    }
+
+    // Bitwise operators
+    constexpr FeatureFlagSet operator|(const FeatureFlagSet& other) const {
+        FeatureFlagSet result;
+        result.bits = bits | other.bits;
+        return result;
+    }
+
+    constexpr FeatureFlagSet operator&(const FeatureFlagSet& other) const {
+        FeatureFlagSet result;
+        result.bits = bits & other.bits;
+        return result;
+    }
+
+    constexpr FeatureFlagSet operator^(const FeatureFlagSet& other) const {
+        FeatureFlagSet result;
+        result.bits = bits ^ other.bits;
+        return result;
+    }
+
+    constexpr FeatureFlagSet operator~() const {
+        FeatureFlagSet result;
+        result.bits = ~bits;
+        return result;
+    }
+
+    // Compound assignment operators
+    constexpr FeatureFlagSet& operator|=(const FeatureFlagSet& other) {
+        bits |= other.bits;
+        return *this;
+    }
+
+    constexpr FeatureFlagSet& operator&=(const FeatureFlagSet& other) {
+        bits &= other.bits;
+        return *this;
+    }
+
+    constexpr FeatureFlagSet& operator^=(const FeatureFlagSet& other) {
+        bits ^= other.bits;
+        return *this;
+    }
+
+    // Utility methods
+    [[nodiscard]] constexpr bool any() const { return bits.any(); }
+    [[nodiscard]] constexpr bool none() const { return bits.none(); }
+    [[nodiscard]] constexpr bool all() const { return bits.all(); }
+    [[nodiscard]] constexpr std::size_t count() const { return bits.count(); }
+
+    // String conversion
+    [[nodiscard]] std::string to_string() const { return bits.to_string(); }
+};
+
+// Helper function to create a flag set from a single flag
+template <EnumFlag E>
+constexpr auto make_flag(E flag) {
+    FeatureFlagSet<E> result;
+    result.set(flag);
+    return result;
+}
+
+// Helper function to create a flag set from multiple flags
+template <EnumFlag E, typename... Args>
+constexpr auto make_flags(E first, Args... rest) {
+    FeatureFlagSet<E> result;
+    result.set(first);
+    if constexpr (sizeof...(rest) > 0) {
+        ((result.set(rest)), ...);
+    }
+    return result;
+}
+
+// Type alias for SuperResolutionFeatureFlags
+using FeatureFlags = FeatureFlagSet<SuperResolutionFeatureFlags>;
+
+// Type alias for SuperResolutionScale
+using ScaleFlags = FeatureFlagSet<SuperResolutionScale>;
+
+// Helper function to convert int scale to SuperResolutionScale
+inline SuperResolutionScale int_to_scale(int scale) {
+    switch (scale) {
+        case 1:
+            return SuperResolutionScale::X1;
+
+        case 2:
+            return SuperResolutionScale::X2;
+
+        case 3:
+            return SuperResolutionScale::X3;
+
+        case 4:
+            return SuperResolutionScale::X4;
+    }
+    throw std::invalid_argument("Invalid scale value: " + std::to_string(scale));
+}
+
+// Engine information structure
+struct SuperResolutionEngineInfo {
+    std::string engine_name;               // Engine name
+    FeatureFlags supported_features;       // Supported feature flags
+    ScaleFlags supported_scales;           // Supported scale factors (bit flags)
+    std::vector<std::string> model_names;  // Supported model names
+    std::string default_model;             // Default model name
+    int default_noise = -1;                // Default noise level
+    int default_scale = 2;                 // Default scale factor
+    std::string description;               // Engine description
+    std::string version;                   // Engine version
+
+    // Helper method to check if a feature is supported
+    bool supports(SuperResolutionFeatureFlags feature) const {
+        return supported_features.test(feature);
+    }
+
+    // Helper method to check if a scale is supported
+    bool supports_scale(int scale) const {
+        try {
+            return supported_scales.test(int_to_scale(scale));
+        } catch (const std::invalid_argument&) {
+            return false;  // Invalid scale values are not supported
+        }
+    }
+
+    // Helper method to check if a scale is supported (enum version)
+    bool supports_scale(SuperResolutionScale scale) const {
+        return supported_scales.test(scale);
+    }
+
+    // Helper method to check if a model is supported
+    bool supports_model(const std::string& model) const {
+        return std::find(model_names.begin(), model_names.end(), model) != model_names.end();
+    }
+
+    // Helper method to check if a config is compatible with this engine
+    bool is_compatible_config(const struct SuperResolutionEngineConfig& config) const;
+};
 
 enum class ColorFormat {
     RGB = 0,
@@ -29,7 +233,40 @@ struct SuperResolutionEngineConfig {
 
     int noise = -1;   // RealCUGAN, SRMD, Waifu2x (-1, 0, 1, 2, 3). Noise level should be set during initialization as it controls model loading.
     int syncgap = 0;  // RealCUGAN only (0, 1, 2, 3)
+
+    // Engine name (optional)
+    std::string engine_name;
 };
+
+// Forward declaration for is_compatible_config method
+inline bool SuperResolutionEngineInfo::is_compatible_config(const SuperResolutionEngineConfig& config) const {
+    // Check model
+    if (!config.model.empty() && !supports_model(config.model)) {
+        return false;
+    }
+
+    // Check TTA mode
+    if (config.tta_mode && !supports(SuperResolutionFeatureFlags::TTA_MODE)) {
+        return false;
+    }
+
+    // Check noise level
+    if (config.noise >= 0 && !supports(SuperResolutionFeatureFlags::NOISE)) {
+        return false;
+    }
+
+    // Check SyncGAP
+    if (config.syncgap > 0 && !supports(SuperResolutionFeatureFlags::SYNCGAP)) {
+        return false;
+    }
+
+    // Check CPU mode
+    if (config.gpuid < 0 && !supports(SuperResolutionFeatureFlags::CPU)) {
+        return false;
+    }
+
+    return true;
+}
 
 // Configuration for processing
 struct ProcessConfig {
@@ -39,14 +276,13 @@ struct ProcessConfig {
     ColorFormat output_format = ColorFormat::RGB;  // All engines
 
     int tilesize = 400;   // All engines
-    int prepadding = 12;  // All engines
 };
 
 // Bicubic layers management
 class BicubicLayers {
    public:
     BicubicLayers(ncnn::VulkanDevice* vkdev, const ncnn::Option& opt);
-    ~BicubicLayers();
+    ~BicubicLayers() = default;
 
     std::shared_ptr<ncnn::Layer> get_bicubic(int scale) const;
 

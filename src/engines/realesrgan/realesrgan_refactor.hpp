@@ -13,6 +13,26 @@ class RealESRGAN final : public SuperResolutionEngine {
 
     ProcessConfig create_default_process_config() const override;
 
+    // Engine information
+    static const SuperResolutionEngineInfo& get_engine_info() {
+        static const SuperResolutionEngineInfo info{
+            .engine_name = "realesrgan",
+            .supported_features = FeatureFlags(
+                SuperResolutionFeatureFlags::TTA_MODE,
+                SuperResolutionFeatureFlags::ALPHA,
+                SuperResolutionFeatureFlags::TILESIZE),
+            .supported_scales = ScaleFlags(
+                SuperResolutionScale::X2,
+                SuperResolutionScale::X3,
+                SuperResolutionScale::X4),
+            .model_names = {"realesrgan-x4plus", "realesrnet-x4plus", "realesrgan-x4plus-anime", "realesr-animevideov3"},
+            .default_model = "realesrgan-x4plus",
+            .default_scale = 4,
+            .description = "Enhanced ESRGAN implementation with pure-CNN architecture",
+            .version = "1.0.0"};
+        return info;
+    }
+
    protected:
     void prepare_net_options(ncnn::Option& options) const override;
 

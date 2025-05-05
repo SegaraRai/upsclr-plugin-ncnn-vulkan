@@ -90,7 +90,7 @@ static std::vector<int> parse_optarg_int_array(const char* optarg) {
 #include "gpu.h"
 #include "platform.h"
 
-#include "engines/realesrgan/realesrgan_refactor.hpp"
+#include "engines/engine_factory.hpp"
 
 #include "filesystem_utils.h"
 
@@ -102,12 +102,37 @@ static void print_usage() {
     fprintf(stderr, "  -s scale             upscale ratio (can be 2, 3, 4. default=4)\n");
     fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
     fprintf(stderr, "  -m model-path        folder path to the pre-trained models. default=models\n");
-    fprintf(stderr, "  -n model-name        model name (default=realesr-animevideov3, can be realesr-animevideov3 | realesrgan-x4plus | realesrgan-x4plus-anime | realesrnet-x4plus)\n");
+    fprintf(stderr, "  -n model-name        model name (default depends on engine)\n");
+    fprintf(stderr, "  -e engine            engine to use (realesrgan, realcugan, default=realesrgan)\n");
     fprintf(stderr, "  -g gpu-id            gpu device to use (default=auto) can be 0,1,2 for multi-gpu\n");
     fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
     fprintf(stderr, "  -x                   enable tta mode\n");
     fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
     fprintf(stderr, "  -v                   verbose output\n");
+    fprintf(stderr, "  -y noise             noise level (-1/0/1/2/3, default=0, only for realcugan)\n");
+    fprintf(stderr, "  -z syncgap           sync gap mode (0/1/2/3, default=0, only for realcugan)\n");
+
+    // Print available engines
+    fprintf(stderr, "\nAvailable engines:\n");
+    auto engines = SuperResolutionEngineFactory::get_available_engines();
+    for (const auto& engine : engines) {
+        const auto* info = SuperResolutionEngineFactory::get_engine_info(engine);
+        fprintf(stderr, "  %s: %s\n", engine.c_str(), info->description.c_str());
+        fprintf(stderr, "    Models: ");
+        for (size_t i = 0; i < info->model_names.size(); ++i) {
+            fprintf(stderr, "%s", info->model_names[i].c_str());
+            if (i < info->model_names.size() - 1) {
+                fprintf(stderr, ", ");
+            }
+        }
+        fprintf(stderr, "\n");
+        fprintf(stderr, "    Default model: %s\n", info->default_model.c_str());
+        fprintf(stderr, "    Default scale: %d\n", info->default_scale);
+        if (info->default_noise >= 0) {
+            fprintf(stderr, "    Default noise: %d\n", info->default_noise);
+        }
+        fprintf(stderr, "\n");
+    }
 }
 
 class Task {
@@ -256,16 +281,15 @@ void* load(void* args) {
             v.config = ProcessConfig{
                 .scale = scale,
 
-                #if _WIN32
+#if _WIN32
                 .input_format = ColorFormat::BGR,
                 .output_format = ColorFormat::BGR,
-                #else
+#else
                 .input_format = ColorFormat::RGB,
                 .output_format = ColorFormat::RGB,
-                #endif
+#endif
 
                 .tilesize = 200,
-                .prepadding = 10,
             };
 
             path_t ext = get_file_extension(v.outpath);
@@ -294,13 +318,13 @@ void* load(void* args) {
 
 class ProcThreadParams {
    public:
-    const RealESRGAN* realesrgan;
+    const SuperResolutionEngine* engine;
     ProcessConfig default_config;
 };
 
 void* proc(void* args) {
     const ProcThreadParams* ptp = (const ProcThreadParams*)args;
-    const RealESRGAN* realesrgan = ptp->realesrgan;
+    const SuperResolutionEngine* engine = ptp->engine;
     const auto tilesize = ptp->default_config.tilesize;
 
     for (;;) {
@@ -312,7 +336,7 @@ void* proc(void* args) {
             break;
 
         v.config.tilesize = tilesize;
-        realesrgan->process(v.inimage, v.outimage, v.config);
+        engine->process(v.inimage, v.outimage, v.config);
 
         tosave.put(v);
     }
@@ -409,7 +433,10 @@ int main(int argc, char** argv)
     int scale = 4;
     std::vector<int> tilesize;
     path_t model = PATHSTR("models");
-    std::string modelname = "realesr-animevideov3";
+    std::string modelname = "";
+    std::string engine_name = "realesrgan";
+    int noise = 0;
+    int syncgap = 0;
     std::vector<int> gpuid;
     int jobs_load = 1;
     std::vector<int> jobs_proc;
@@ -421,7 +448,7 @@ int main(int argc, char** argv)
 #if _WIN32
     setlocale(LC_ALL, "");
     wchar_t opt;
-    while ((opt = getopt(argc, argv, L"i:o:s:t:m:n:g:j:f:vxh")) != (wchar_t)-1) {
+    while ((opt = getopt(argc, argv, L"i:o:s:t:m:n:e:g:j:f:y:z:vxh")) != (wchar_t)-1) {
         switch (opt) {
             case L'i':
                 inputpath = optarg;
@@ -441,6 +468,12 @@ int main(int argc, char** argv)
             case L'n':
                 modelname.resize(wcslen(optarg) + 1);
                 sprintf_s(&modelname[0], modelname.size(), "%ls", optarg);
+                modelname.resize(wcslen(optarg));
+                break;
+            case L'e':
+                engine_name.resize(wcslen(optarg) + 1);
+                sprintf_s(&engine_name[0], engine_name.size(), "%ls", optarg);
+                engine_name.resize(wcslen(optarg));
                 break;
             case L'g':
                 gpuid = parse_optarg_int_array(optarg);
@@ -458,6 +491,12 @@ int main(int argc, char** argv)
             case L'x':
                 tta_mode = 1;
                 break;
+            case L'y':
+                noise = _wtoi(optarg);
+                break;
+            case L'z':
+                syncgap = _wtoi(optarg);
+                break;
             case L'h':
             default:
                 print_usage();
@@ -466,7 +505,7 @@ int main(int argc, char** argv)
     }
 #else   // _WIN32
     int opt;
-    while ((opt = getopt(argc, argv, "i:o:s:t:m:n:g:j:f:vxh")) != -1) {
+    while ((opt = getopt(argc, argv, "i:o:s:t:m:n:e:g:j:f:y:z:vxh")) != -1) {
         switch (opt) {
             case 'i':
                 inputpath = optarg;
@@ -486,6 +525,9 @@ int main(int argc, char** argv)
             case 'n':
                 modelname = optarg;
                 break;
+            case 'e':
+                engine_name = optarg;
+                break;
             case 'g':
                 gpuid = parse_optarg_int_array(optarg);
                 break;
@@ -501,6 +543,12 @@ int main(int argc, char** argv)
                 break;
             case 'x':
                 tta_mode = 1;
+                break;
+            case 'y':
+                noise = atoi(optarg);
+                break;
+            case 'z':
+                syncgap = atoi(optarg);
                 break;
             case 'h':
             default:
@@ -612,13 +660,28 @@ int main(int argc, char** argv)
         }
     }
 
-    int prepadding = 0;
+    // Check if the engine exists
+    auto engines = SuperResolutionEngineFactory::get_available_engines();
+    bool engine_found = false;
+    for (const auto& e : engines) {
+        if (e == engine_name) {
+            engine_found = true;
+            break;
+        }
+    }
 
-    if (model.find(PATHSTR("models")) != path_t::npos || model.find(PATHSTR("models2")) != path_t::npos) {
-        prepadding = 10;
-    } else {
-        fprintf(stderr, "unknown model dir type\n");
+    if (!engine_found) {
+        fprintf(stderr, "Unknown engine: '%s'\n\n", engine_name.c_str());
+        print_usage();
         return -1;
+    }
+
+    // Get engine info
+    const auto* engine_info = SuperResolutionEngineFactory::get_engine_info(engine_name);
+
+    // Set default model name if not specified
+    if (modelname.empty()) {
+        modelname = engine_info->default_model;
     }
 
 #if _WIN32
@@ -663,7 +726,7 @@ int main(int argc, char** argv)
     }
 
     {
-        std::vector<RealESRGAN*> realesrgan(use_gpu_count);
+        std::vector<std::unique_ptr<SuperResolutionEngine>> engines;
 
         for (int i = 0; i < use_gpu_count; i++) {
             SuperResolutionEngineConfig config{
@@ -672,18 +735,24 @@ int main(int argc, char** argv)
 
                 .gpuid = gpuid[i],
                 .tta_mode = tta_mode != 0,
+                .num_threads = 1,
+
+                .noise = noise,
+                .syncgap = syncgap,
             };
 
-            printf("Creating RealESRGAN instance for gpuid=%d, model=%s, model_dir=%s\n",
-                   config.gpuid, config.model.c_str(), config.model_dir.string().c_str());
+            printf("Creating %s instance for gpuid=%d, model=%s, model_dir=%s\n",
+                   engine_name.c_str(), config.gpuid, config.model.c_str(), config.model_dir.string().c_str());
 
-            realesrgan[i] = new RealESRGAN(config);
-            
+            auto engine = SuperResolutionEngineFactory::create_engine(engine_name, config);
+
             // Check if the instance was created successfully
-            if (realesrgan[i] == nullptr) {
-                printf("ERROR: Failed to create RealESRGAN instance for gpuid=%d\n", config.gpuid);
+            if (engine == nullptr) {
+                printf("ERROR: Failed to create %s instance for gpuid=%d\n", engine_name.c_str(), config.gpuid);
                 return -1;
             }
+
+            engines.emplace_back(std::move(engine));
         }
 
         // main routine
@@ -697,11 +766,21 @@ int main(int argc, char** argv)
 
             ncnn::Thread load_thread(load, (void*)&ltp);
 
-            // realesrgan proc
+            // engine proc
             std::vector<ProcThreadParams> ptp(use_gpu_count);
             for (int i = 0; i < use_gpu_count; i++) {
-                ptp[i].realesrgan = realesrgan[i];
-                ptp[i].default_config = realesrgan[i]->create_default_process_config();
+                ptp[i].engine = engines[i].get();
+                ptp[i].default_config = engines[i]->create_default_process_config();
+
+                // Override scale if specified
+                if (scale > 0) {
+                    ptp[i].default_config.scale = scale;
+                }
+
+                // Override tilesize if specified
+                if (!tilesize.empty() && tilesize[i] > 0) {
+                    ptp[i].default_config.tilesize = tilesize[i];
+                }
             }
 
             std::vector<ncnn::Thread*> proc_threads(total_jobs_proc);
@@ -748,10 +827,7 @@ int main(int argc, char** argv)
             }
         }
 
-        for (int i = 0; i < use_gpu_count; i++) {
-            delete realesrgan[i];
-        }
-        realesrgan.clear();
+        engines.clear();
     }
 
     ncnn::destroy_gpu_instance();

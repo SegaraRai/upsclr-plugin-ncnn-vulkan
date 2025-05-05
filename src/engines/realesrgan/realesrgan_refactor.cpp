@@ -1,5 +1,3 @@
-#define NOMINMAX
-
 #include "realesrgan_refactor.hpp"
 
 #include <algorithm>
@@ -10,43 +8,45 @@
 
 namespace {
 
-static const uint32_t realesrgan_preproc_spv_data[] = {
-#include "realesrgan_preproc.spv.hex.h"
+const uint32_t realesrgan_preproc_spv_data[] = {
+#include "shaders/realesrgan_preproc.spv.hex.h"
 };
-static const uint32_t realesrgan_preproc_fp16s_spv_data[] = {
-#include "realesrgan_preproc_fp16s.spv.hex.h"
+const uint32_t realesrgan_preproc_fp16s_spv_data[] = {
+#include "shaders/realesrgan_preproc_fp16s.spv.hex.h"
 };
-static const uint32_t realesrgan_preproc_int8s_spv_data[] = {
-#include "realesrgan_preproc_int8s.spv.hex.h"
+const uint32_t realesrgan_preproc_int8s_spv_data[] = {
+#include "shaders/realesrgan_preproc_int8s.spv.hex.h"
 };
-static const uint32_t realesrgan_postproc_spv_data[] = {
-#include "realesrgan_postproc.spv.hex.h"
+const uint32_t realesrgan_postproc_spv_data[] = {
+#include "shaders/realesrgan_postproc.spv.hex.h"
 };
-static const uint32_t realesrgan_postproc_fp16s_spv_data[] = {
-#include "realesrgan_postproc_fp16s.spv.hex.h"
+const uint32_t realesrgan_postproc_fp16s_spv_data[] = {
+#include "shaders/realesrgan_postproc_fp16s.spv.hex.h"
 };
-static const uint32_t realesrgan_postproc_int8s_spv_data[] = {
-#include "realesrgan_postproc_int8s.spv.hex.h"
+const uint32_t realesrgan_postproc_int8s_spv_data[] = {
+#include "shaders/realesrgan_postproc_int8s.spv.hex.h"
 };
 
-static const uint32_t realesrgan_preproc_tta_spv_data[] = {
-#include "realesrgan_preproc_tta.spv.hex.h"
+const uint32_t realesrgan_preproc_tta_spv_data[] = {
+#include "shaders/realesrgan_preproc_tta.spv.hex.h"
 };
-static const uint32_t realesrgan_preproc_tta_fp16s_spv_data[] = {
-#include "realesrgan_preproc_tta_fp16s.spv.hex.h"
+const uint32_t realesrgan_preproc_tta_fp16s_spv_data[] = {
+#include "shaders/realesrgan_preproc_tta_fp16s.spv.hex.h"
 };
-static const uint32_t realesrgan_preproc_tta_int8s_spv_data[] = {
-#include "realesrgan_preproc_tta_int8s.spv.hex.h"
+const uint32_t realesrgan_preproc_tta_int8s_spv_data[] = {
+#include "shaders/realesrgan_preproc_tta_int8s.spv.hex.h"
 };
-static const uint32_t realesrgan_postproc_tta_spv_data[] = {
-#include "realesrgan_postproc_tta.spv.hex.h"
+const uint32_t realesrgan_postproc_tta_spv_data[] = {
+#include "shaders/realesrgan_postproc_tta.spv.hex.h"
 };
-static const uint32_t realesrgan_postproc_tta_fp16s_spv_data[] = {
-#include "realesrgan_postproc_tta_fp16s.spv.hex.h"
+const uint32_t realesrgan_postproc_tta_fp16s_spv_data[] = {
+#include "shaders/realesrgan_postproc_tta_fp16s.spv.hex.h"
 };
-static const uint32_t realesrgan_postproc_tta_int8s_spv_data[] = {
-#include "realesrgan_postproc_tta_int8s.spv.hex.h"
+const uint32_t realesrgan_postproc_tta_int8s_spv_data[] = {
+#include "shaders/realesrgan_postproc_tta_int8s.spv.hex.h"
 };
+
+static constexpr int REALESRGAN_PREPADDING = 10;
 
 enum class StorageMode {
     FP16_INT8,
@@ -54,7 +54,7 @@ enum class StorageMode {
     OTHER,
 };
 
-inline StorageMode get_storage_mode(const ncnn::Option& options) {
+StorageMode get_storage_mode(const ncnn::Option& options) {
     if (options.use_fp16_storage && options.use_int8_storage) {
         return StorageMode::FP16_INT8;
     } else if (options.use_fp16_storage) {
@@ -82,19 +82,28 @@ struct Tile {
     int y1;
 };
 
-inline void extract_features(ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd);
-inline void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu, ncnn::VkMat& in_tile_gpu, ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
-inline void preprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu, ncnn::VkMat in_tile_gpu[8], ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
-inline void postprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu, ncnn::VkMat& out_tile_gpu, ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
-inline void postprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu, ncnn::VkMat out_tile_gpu[8], ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
+void extract_features(ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd);
+void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat& in_tile_gpu, ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
+void preprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat in_tile_gpu[8], ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
+void postprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu_row, ncnn::VkMat& out_tile_gpu, ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
+void postprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu_row, ncnn::VkMat out_tile_gpu[8], ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
 
 }  // namespace
 
 RealESRGAN::RealESRGAN(const SuperResolutionEngineConfig& config)
     : SuperResolutionEngine(config) {
+    // Validate config against engine info
+    const auto& info = get_engine_info();
+    if (!info.is_compatible_config(config)) {
+        fprintf(stderr, "WARNING: Configuration may not be fully compatible with RealESRGAN engine\n");
+    }
 }
 
 ProcessConfig RealESRGAN::create_default_process_config() const {
+    // Get engine info
+    const auto& info = get_engine_info();
+
+    // Determine tile size based on available GPU memory
     const uint32_t heap_budget = this->vkdev != nullptr ? this->vkdev->get_heap_budget() : 2000;
 
     int tilesize = 0;
@@ -109,11 +118,10 @@ ProcessConfig RealESRGAN::create_default_process_config() const {
     }
 
     return ProcessConfig{
-        .scale = 2,
+        .scale = info.default_scale,
         .input_format = ColorFormat::RGB,
         .output_format = ColorFormat::RGB,
         .tilesize = tilesize,
-        .prepadding = 10,
     };
 }
 
@@ -129,10 +137,21 @@ void RealESRGAN::prepare_net_options(ncnn::Option& options) const {
 }
 
 std::shared_ptr<ncnn::Net> RealESRGAN::create_net(int scale, const NetCache& net_cache) const {
+    // Get engine info
+    const auto& info = get_engine_info();
+
+    // Use default model if none specified
+    std::string model_name = this->config.model.empty() ? info.default_model : this->config.model;
+
+    // Check if model is supported
+    if (!info.supports_model(model_name)) {
+        fprintf(stderr, "WARNING: Model '%s' is not officially supported by RealESRGAN\n", model_name.c_str());
+    }
+
     std::string basename;
-    if (this->config.model == "realesr-animevideov3") {
+    if (model_name == "realesr-animevideov3") {
         // For `realesr-animevideov3`, the model depends on the scale
-        basename = std::format("{}-x{}", this->config.model, scale);
+        basename = std::format("{}-x{}", model_name, scale);
     } else {
         // For other models, the scale is not part of the model name
         // Use scale 1 for the representative model for convenience
@@ -141,7 +160,7 @@ std::shared_ptr<ncnn::Net> RealESRGAN::create_net(int scale, const NetCache& net
             return net_cache.get_net(1);
         }
 
-        basename = this->config.model;
+        basename = model_name;
     }
 
     auto net = this->create_net_base();
@@ -242,7 +261,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
     // Get parameters from config
     const int scale = config.scale;
     const int tilesize = config.tilesize;
-    const int prepadding = config.prepadding;
+    const int prepadding = REALESRGAN_PREPADDING;
 
     if (w < 1 || h < 1 || (channels != 3 && channels != 4) || tilesize < 1 || prepadding < 0 || scale < 1) {
         fprintf(stderr, "ERROR: [RealESRGAN::process_gpu] Invalid input parameters\n");
@@ -309,21 +328,21 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
         const int in_tile_y0 = std::max(yi * TILE_SIZE_Y - prepadding, 0);
         const int in_tile_y1 = std::min((yi + 1) * TILE_SIZE_Y + prepadding, h);
 
-        ncnn::Mat in_tile;
+        ncnn::Mat in_cpu_row;
         if (storage_mode == StorageMode::FP16_INT8) {
             // Use source pixel data directly for FP16_INT8 storage mode
-            in_tile = ncnn::Mat(w, (in_tile_y1 - in_tile_y0), const_cast<unsigned char*>(in_data) + in_tile_y0 * w * channels, (size_t)channels, 1);
+            in_cpu_row = ncnn::Mat(w, (in_tile_y1 - in_tile_y0), const_cast<unsigned char*>(in_data) + in_tile_y0 * w * channels, (size_t)channels, 1);
         } else {
             // Copy pixel data to ncnn::Mat for other storage modes
-            in_tile = ncnn::Mat::from_pixels(in_data + in_tile_y0 * w * channels, in_pixel_format, w, (in_tile_y1 - in_tile_y0));
+            in_cpu_row = ncnn::Mat::from_pixels(in_data + in_tile_y0 * w * channels, in_pixel_format, w, (in_tile_y1 - in_tile_y0));
         }
 
         ncnn::VkCompute cmd(vkdev);
 
         // Upload input tile
-        ncnn::VkMat in_gpu;
+        ncnn::VkMat in_gpu_row;
 
-        cmd.record_clone(in_tile, in_gpu, opt);
+        cmd.record_clone(in_cpu_row, in_gpu_row, opt);
         if (xtiles > 1) {
             cmd.submit_and_wait();
             cmd.reset();
@@ -333,11 +352,11 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
         const int out_tile_y1 = std::min((yi + 1) * TILE_SIZE_Y, h);
 
         // Create output GPU mat
-        ncnn::VkMat out_gpu;
+        ncnn::VkMat out_gpu_row;
         if (storage_mode == StorageMode::FP16_INT8) {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, blob_vkallocator);
+            out_gpu_row.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, (size_t)channels, 1, blob_vkallocator);
         } else {
-            out_gpu.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator);
+            out_gpu_row.create(w * scale, (out_tile_y1 - out_tile_y0) * scale, channels, (size_t)4u, 1, blob_vkallocator);
         }
 
         // Process each tile
@@ -368,8 +387,6 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
                 .y1 = tile_y1,
             };
 
-            //printf("Processing tile [%d, %d] (%d, %d) -> (%d, %d) | (%d / %d, %d / %d)\n", xi, yi, tile.x0, tile.y0, tile.x1, tile.y1, tile.w_nopad, TILE_SIZE_X, tile.h_nopad, TILE_SIZE_Y);
-
             if (!this->config.tta_mode) {
                 // Standard mode processing
                 // Preprocess
@@ -377,7 +394,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
                 ncnn::VkMat in_alpha_tile_gpu;
 
                 // Preprocess
-                preprocess_tile_gpu(pipelines, in_gpu, in_tile_gpu, in_alpha_tile_gpu,
+                preprocess_tile_gpu(pipelines, in_gpu_row, in_tile_gpu, in_alpha_tile_gpu,
                                     prepadding, channels, in_format, tile, cmd, opt);
 
                 // Process with neural network
@@ -391,7 +408,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
                 }
 
                 // Postprocess
-                postprocess_tile_gpu(pipelines, out_gpu, out_tile_gpu, out_alpha_tile_gpu,
+                postprocess_tile_gpu(pipelines, out_gpu_row, out_tile_gpu, out_alpha_tile_gpu,
                                      prepadding, channels, out_format, scale, tile, cmd, opt);
             } else {
                 // TTA mode processing
@@ -399,7 +416,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
                 ncnn::VkMat in_alpha_tile_gpu;
 
                 // Preprocess with TTA
-                preprocess_tile_tta_gpu(pipelines, in_gpu, in_tile_gpu, in_alpha_tile_gpu,
+                preprocess_tile_tta_gpu(pipelines, in_gpu_row, in_tile_gpu, in_alpha_tile_gpu,
                                         prepadding, channels, in_format, tile, cmd, opt);
 
                 // Process with neural network
@@ -418,7 +435,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
                 }
 
                 // Postprocess with TTA
-                postprocess_tile_tta_gpu(pipelines, out_gpu, out_tile_gpu, out_alpha_tile_gpu,
+                postprocess_tile_tta_gpu(pipelines, out_gpu_row, out_tile_gpu, out_alpha_tile_gpu,
                                          prepadding, channels, out_format, scale, tile, cmd, opt);
             }
 
@@ -429,20 +446,20 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
         }
 
         // Download output tile
-        ncnn::Mat out_tile;
+        ncnn::Mat out_cpu_row;
         if (storage_mode == StorageMode::FP16_INT8) {
             // Output directly to the output mat if using FP16_INT8 storage
-            out_tile = ncnn::Mat(out_gpu.w, out_gpu.h, out_data + yi * scale * TILE_SIZE_Y * w * scale * channels, (size_t)channels, 1);
+            out_cpu_row = ncnn::Mat(out_gpu_row.w, out_gpu_row.h, out_data + yi * scale * TILE_SIZE_Y * w * scale * channels, (size_t)channels, 1);
         }
 
-        cmd.record_clone(out_gpu, out_tile, opt);
+        cmd.record_clone(out_gpu_row, out_cpu_row, opt);
         cmd.submit_and_wait();
 
         // Copy to output image
         if (storage_mode != StorageMode::FP16_INT8) {
             // Copy output tile to the output mat
-            out_tile.to_pixels(out_data + yi * scale * TILE_SIZE_Y * w * scale * channels,
-                               out_pixel_format);
+            out_cpu_row.to_pixels(out_data + yi * scale * TILE_SIZE_Y * w * scale * channels,
+                                  out_pixel_format);
         }
     }
 
@@ -461,7 +478,7 @@ int RealESRGAN::process_cpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
 
 namespace {
 
-inline void extract_features(ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd) {
+void extract_features(ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd) {
     ncnn::Extractor ex = net.create_extractor();
 
     ex.set_blob_vkallocator(options.blob_vkallocator);
@@ -472,7 +489,7 @@ inline void extract_features(ncnn::Net& net, const ncnn::Option& options, const 
     ex.extract("output", out_tile, cmd);
 }
 
-inline void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu, ncnn::VkMat& in_tile_gpu, ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {
+void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat& in_tile_gpu, ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {
     in_tile_gpu.create(tile.x1 - tile.x0, tile.y1 - tile.y0, 3, tile.elemsize, 1, opt.blob_vkallocator);
 
     if (channels == 4) {
@@ -480,14 +497,14 @@ inline void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const
     }
 
     std::vector<ncnn::VkMat> bindings(3);
-    bindings[0] = in_gpu;
+    bindings[0] = in_gpu_row;
     bindings[1] = in_tile_gpu;
     bindings[2] = in_alpha_tile_gpu;
 
     std::vector<ncnn::vk_constant_type> constants(13);
-    constants[0].i = in_gpu.w;
-    constants[1].i = in_gpu.h;
-    constants[2].i = in_gpu.cstep;
+    constants[0].i = in_gpu_row.w;
+    constants[1].i = in_gpu_row.h;
+    constants[2].i = in_gpu_row.cstep;
     constants[3].i = in_tile_gpu.w;
     constants[4].i = in_tile_gpu.h;
     constants[5].i = in_tile_gpu.cstep;
@@ -507,7 +524,7 @@ inline void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const
     cmd.record_pipeline(format == ColorFormat::RGB ? &pipelines.preprocess_rgb : &pipelines.preprocess_bgr, bindings, constants, dispatcher);
 }
 
-inline void preprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu, ncnn::VkMat in_tile_gpu[8], ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {
+void preprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat in_tile_gpu[8], ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {
     in_tile_gpu[0].create(tile.x1 - tile.x0, tile.y1 - tile.y0, 3, tile.elemsize, 1, opt.blob_vkallocator);
     in_tile_gpu[1].create(tile.x1 - tile.x0, tile.y1 - tile.y0, 3, tile.elemsize, 1, opt.blob_vkallocator);
     in_tile_gpu[2].create(tile.x1 - tile.x0, tile.y1 - tile.y0, 3, tile.elemsize, 1, opt.blob_vkallocator);
@@ -522,7 +539,7 @@ inline void preprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, c
     }
 
     std::vector<ncnn::VkMat> bindings(10);
-    bindings[0] = in_gpu;
+    bindings[0] = in_gpu_row;
     bindings[1] = in_tile_gpu[0];
     bindings[2] = in_tile_gpu[1];
     bindings[3] = in_tile_gpu[2];
@@ -534,9 +551,9 @@ inline void preprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, c
     bindings[9] = in_alpha_tile_gpu;
 
     std::vector<ncnn::vk_constant_type> constants(13);
-    constants[0].i = in_gpu.w;
-    constants[1].i = in_gpu.h;
-    constants[2].i = in_gpu.cstep;
+    constants[0].i = in_gpu_row.w;
+    constants[1].i = in_gpu_row.h;
+    constants[2].i = in_gpu_row.cstep;
     constants[3].i = in_tile_gpu[0].w;
     constants[4].i = in_tile_gpu[0].h;
     constants[5].i = in_tile_gpu[0].cstep;
@@ -556,21 +573,21 @@ inline void preprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, c
     cmd.record_pipeline(format == ColorFormat::RGB ? &pipelines.preprocess_rgb : &pipelines.preprocess_bgr, bindings, constants, dispatcher);
 }
 
-inline void postprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu, ncnn::VkMat& out_tile_gpu, ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {
+void postprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu_row, ncnn::VkMat& out_tile_gpu, ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {
     std::vector<ncnn::VkMat> bindings(3);
     bindings[0] = out_tile_gpu;
     bindings[1] = out_alpha_tile_gpu;
-    bindings[2] = out_gpu;
+    bindings[2] = out_gpu_row;
 
     std::vector<ncnn::vk_constant_type> constants(13);
     constants[0].i = out_tile_gpu.w;
     constants[1].i = out_tile_gpu.h;
     constants[2].i = out_tile_gpu.cstep;
-    constants[3].i = out_gpu.w;
-    constants[4].i = out_gpu.h;
-    constants[5].i = out_gpu.cstep;
+    constants[3].i = out_gpu_row.w;
+    constants[4].i = out_gpu_row.h;
+    constants[5].i = out_gpu_row.cstep;
     constants[6].i = tile.xi * tile.size_x * scale;
-    constants[7].i = std::min(tile.size_x * scale, out_gpu.w - tile.xi * tile.size_x * scale);
+    constants[7].i = std::min(tile.size_x * scale, out_gpu_row.w - tile.xi * tile.size_x * scale);
     constants[8].i = prepadding * scale;
     constants[9].i = prepadding * scale;
     constants[10].i = channels;
@@ -578,14 +595,14 @@ inline void postprocess_tile_gpu(const SuperResolutionPipelines& pipelines, cons
     constants[12].i = out_alpha_tile_gpu.h;
 
     ncnn::VkMat dispatcher;
-    dispatcher.w = std::min(tile.size_x * scale, out_gpu.w - tile.xi * tile.size_x * scale);
-    dispatcher.h = out_gpu.h;
+    dispatcher.w = std::min(tile.size_x * scale, out_gpu_row.w - tile.xi * tile.size_x * scale);
+    dispatcher.h = out_gpu_row.h;
     dispatcher.c = channels;
 
     cmd.record_pipeline(format == ColorFormat::RGB ? &pipelines.postprocess_rgb : &pipelines.postprocess_bgr, bindings, constants, dispatcher);
 }
 
-inline void postprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu, ncnn::VkMat out_tile_gpu[8], ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {
+void postprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu_row, ncnn::VkMat out_tile_gpu[8], ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {
     std::vector<ncnn::VkMat> bindings(10);
     bindings[0] = out_tile_gpu[0];
     bindings[1] = out_tile_gpu[1];
@@ -596,17 +613,17 @@ inline void postprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, 
     bindings[6] = out_tile_gpu[6];
     bindings[7] = out_tile_gpu[7];
     bindings[8] = out_alpha_tile_gpu;
-    bindings[9] = out_gpu;
+    bindings[9] = out_gpu_row;
 
     std::vector<ncnn::vk_constant_type> constants(13);
     constants[0].i = out_tile_gpu[0].w;
     constants[1].i = out_tile_gpu[0].h;
     constants[2].i = out_tile_gpu[0].cstep;
-    constants[3].i = out_gpu.w;
-    constants[4].i = out_gpu.h;
-    constants[5].i = out_gpu.cstep;
+    constants[3].i = out_gpu_row.w;
+    constants[4].i = out_gpu_row.h;
+    constants[5].i = out_gpu_row.cstep;
     constants[6].i = tile.xi * tile.size_x * scale;
-    constants[7].i = std::min(tile.size_x * scale, out_gpu.w - tile.xi * tile.size_x * scale);
+    constants[7].i = std::min(tile.size_x * scale, out_gpu_row.w - tile.xi * tile.size_x * scale);
     constants[8].i = prepadding * scale;
     constants[9].i = prepadding * scale;
     constants[10].i = channels;
@@ -614,8 +631,8 @@ inline void postprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, 
     constants[12].i = out_alpha_tile_gpu.h;
 
     ncnn::VkMat dispatcher;
-    dispatcher.w = std::min(tile.size_x * scale, out_gpu.w - tile.xi * tile.size_x * scale);
-    dispatcher.h = out_gpu.h;
+    dispatcher.w = std::min(tile.size_x * scale, out_gpu_row.w - tile.xi * tile.size_x * scale);
+    dispatcher.h = out_gpu_row.h;
     dispatcher.c = channels;
 
     cmd.record_pipeline(format == ColorFormat::RGB ? &pipelines.postprocess_rgb : &pipelines.postprocess_bgr, bindings, constants, dispatcher);
