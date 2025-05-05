@@ -765,6 +765,8 @@ int main(int argc, char** argv)
                 return -1;
             }
 
+            engine->warmup(scale);
+
             engines.emplace_back(std::move(engine));
         }
 

@@ -470,12 +470,6 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
     return 0;
 }
 
-int RealESRGAN::process_cpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
-    // RealESRGAN doesn't support CPU processing
-    fprintf(stderr, "ERROR: [RealESRGAN::process_cpu] CPU processing is not supported\n");
-    return -1;
-}
-
 namespace {
 
 void extract_features(ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd) {

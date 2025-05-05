@@ -41,9 +41,6 @@ class RealESRGAN final : public SuperResolutionEngine {
 
     // Override GPU processing method
     int process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const override;
-
-    // RealESRGAN doesn't support CPU processing
-    int process_cpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const override;
 };
 
 #endif  // REALESRGAN_HPP

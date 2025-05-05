@@ -274,7 +274,7 @@ struct ProcessConfig {
     ColorFormat input_format = ColorFormat::RGB;   // All engines
     ColorFormat output_format = ColorFormat::RGB;  // All engines
 
-    int tilesize = 400;   // All engines
+    int tilesize = 400;  // All engines
 };
 
 // Bicubic layers management
@@ -350,6 +350,8 @@ class SuperResolutionEngine {
     // Constructor and destructor
     SuperResolutionEngine(const SuperResolutionEngineConfig& config);
     virtual ~SuperResolutionEngine();
+
+    virtual int warmup(int scale) const;
 
     // Image processing
     virtual int process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const;

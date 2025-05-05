@@ -155,6 +155,24 @@ std::shared_ptr<ncnn::Net> SuperResolutionEngine::create_net_base() const {
     return net;
 }
 
+int SuperResolutionEngine::warmup(int scale) const {
+    // Get the network for the current scale
+    const auto ptr_net = net_cache.get_net(scale);
+    if (ptr_net == nullptr) {
+        fprintf(stderr, "ERROR: [SuperResolutionEngine::warmup] Failed to get net for scale %d\n", scale);
+        return -1;
+    }
+
+    // Get pipelines for the current scale
+    const auto ptr_pipelines = pipeline_cache.get_pipelines(scale);
+    if (!ptr_pipelines) {
+        fprintf(stderr, "ERROR: [SuperResolutionEngine::warmup] Failed to get pipelines for scale %d\n", scale);
+        return -1;
+    }
+
+    return 0;
+}
+
 int SuperResolutionEngine::process_cpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
     // Base class provides an empty implementation
     // Derived classes should override this method
