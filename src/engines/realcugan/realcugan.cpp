@@ -962,7 +962,7 @@ std::string RealCUGAN::get_model_path(const std::string& model_type, int scale, 
     if (current_type == "models-nose" && (scale != 2)) {
         fprintf(stderr, "WARNING: models-nose does not support scale %d, falling back to models-se\n", scale);
         current_type = "models-se";
-    } else if (current_type == "models-pro" && (scale != 2 || scale != 3)) {
+    } else if (current_type == "models-pro" && (scale != 2 && scale != 3)) {
         fprintf(stderr, "WARNING: models-pro does not support scale %d, falling back to models-se\n", scale);
         current_type = "models-se";
     }
