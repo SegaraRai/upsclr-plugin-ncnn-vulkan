@@ -300,7 +300,7 @@ class LoadThreadParams {
 };
 
 void* load(void* args) {
-    const LoadThreadParams* ltp = (const LoadThreadParams*)args;
+    const LoadThreadParams* ltp = static_cast<const LoadThreadParams*>(args);
     const int count = ltp->input_files.size();
     const int scale = ltp->scale;
 
@@ -320,85 +320,85 @@ void* load(void* args) {
 #else
         FILE* fp = fopen(imagepath.c_str(), "rb");
 #endif
-        if (fp) {
-            // read whole file
-            unsigned char* filedata = 0;
-            int length = 0;
-            {
-                fseek(fp, 0, SEEK_END);
-                length = ftell(fp);
-                rewind(fp);
-                filedata = (unsigned char*)malloc(length);
-                if (filedata) {
-                    fread(filedata, 1, length, fp);
-                }
-                fclose(fp);
-            }
-
-            if (filedata) {
-                pixeldata = webp_load(filedata, length, &w, &h, &c);
-                if (pixeldata) {
-                    webp = 1;
-                } else {
-                    // not webp, try jpg png etc.
-#if _WIN32
-                    pixeldata = wic_decode_image(imagepath.c_str(), &w, &h, &c);
-#else   // _WIN32
-                    pixeldata = stbi_load_from_memory(filedata, length, &w, &h, &c, 0);
-                    if (pixeldata) {
-                        // stb_image auto channel
-                        if (c == 1) {
-                            // grayscale -> rgb
-                            stbi_image_free(pixeldata);
-                            pixeldata = stbi_load_from_memory(filedata, length, &w, &h, &c, 3);
-                            c = 3;
-                        } else if (c == 2) {
-                            // grayscale + alpha -> rgba
-                            stbi_image_free(pixeldata);
-                            pixeldata = stbi_load_from_memory(filedata, length, &w, &h, &c, 4);
-                            c = 4;
-                        }
-                    }
-#endif  // _WIN32
-                }
-
-                free(filedata);
-            }
+        if (!fp) {
+            continue;
         }
 
-        if (pixeldata) {
-            Task v;
-            v.id = i;
-            v.inpath = imagepath;
-            v.outpath = ltp->output_files[i];
+        // read whole file
+        std::unique_ptr<unsigned char[]> filedata;
+        int length = 0;
+        fseek(fp, 0, SEEK_END);
+        length = ftell(fp);
+        rewind(fp);
+        filedata = std::make_unique<unsigned char[]>(length);
+        fread(filedata.get(), 1, length, fp);
+        fclose(fp);
 
-            v.inimage = ncnn::Mat(w, h, (void*)pixeldata, (size_t)c, c);
-            v.outimage = ncnn::Mat(w * scale, h * scale, (size_t)c, c);
+        // decode image
+        if (length > 12 && filedata[0] == 'R' && filedata[8] == 'W') {
+            // RIFF____WEBP
+            pixeldata = webp_load(filedata.get(), length, &w, &h, &c);
+            if (pixeldata) {
+                webp = 1;
+            }
+        }
+        if (!pixeldata) {
+            // not webp, try jpg png etc.
+#if _WIN32
+            pixeldata = wic_decode_image(imagepath.c_str(), &w, &h, &c);
+#else   // _WIN32
+            pixeldata = stbi_load_from_memory(filedata.get(), length, &w, &h, &c, 0);
+            if (pixeldata) {
+                // stb_image auto channel
+                if (c == 1) {
+                    // grayscale -> rgb
+                    stbi_image_free(pixeldata);
+                    pixeldata = stbi_load_from_memory(filedata.get(), length, &w, &h, &c, 3);
+                    c = 3;
+                } else if (c == 2) {
+                    // grayscale + alpha -> rgba
+                    stbi_image_free(pixeldata);
+                    pixeldata = stbi_load_from_memory(filedata.get(), length, &w, &h, &c, 4);
+                    c = 4;
+                }
+            }
+#endif  // _WIN32
+        }
 
-            v.config = ProcessConfig{
-                .scale = scale,
+        if (!pixeldata) {
+            ltp->logger_error->error(PATHSTR("Decode failed: {}"), imagepath);
+            continue;
+        }
+
+        Task v;
+        v.id = i;
+        v.inpath = imagepath;
+        v.outpath = ltp->output_files[i];
+
+        v.inimage = ncnn::Mat(w, h, static_cast<void*>(pixeldata), (size_t)c, c);
+        v.outimage = ncnn::Mat(w * scale, h * scale, (size_t)c, c);
+
+        v.config = ProcessConfig{
+            .scale = scale,
 
 #if _WIN32
-                .input_format = ColorFormat::BGR,
-                .output_format = ColorFormat::BGR,
+            .input_format = ColorFormat::BGR,
+            .output_format = ColorFormat::BGR,
 #else
-                .input_format = ColorFormat::RGB,
-                .output_format = ColorFormat::RGB,
+            .input_format = ColorFormat::RGB,
+            .output_format = ColorFormat::RGB,
 #endif
 
-                .tilesize = 200,
-            };
+            .tilesize = 200,
+        };
 
-            if (const auto ext = get_file_extension(v.outpath); c == 4 && (ext == PATHSTR(".jpg") || ext == PATHSTR(".JPG") || ext == PATHSTR(".jpeg") || ext == PATHSTR(".JPEG"))) {
-                const path_t output_filename2 = ltp->output_files[i] + PATHSTR(".png");
-                v.outpath = output_filename2;
-                ltp->logger_error->warn(PATHSTR("image {} has alpha channel! {} will output {}"), imagepath, imagepath, output_filename2);
-            }
-
-            toproc.put(v);
-        } else {
-            ltp->logger_error->error(PATHSTR("decode image {} failed"), imagepath);
+        if (const auto ext = get_file_extension(v.outpath); c == 4 && (ext == PATHSTR(".jpg") || ext == PATHSTR(".JPG") || ext == PATHSTR(".jpeg") || ext == PATHSTR(".JPEG"))) {
+            const path_t output_filename2 = ltp->output_files[i] + PATHSTR(".png");
+            v.outpath = output_filename2;
+            ltp->logger_error->warn(PATHSTR("Image {} has alpha channel! {} will output {}"), imagepath, imagepath, output_filename2);
         }
+
+        toproc.put(v);
     }
 
     return 0;
@@ -412,7 +412,7 @@ class ProcThreadParams {
 };
 
 void* proc(void* args) {
-    const ProcThreadParams* ptp = (const ProcThreadParams*)args;
+    const ProcThreadParams* ptp = static_cast<const ProcThreadParams*>(args);
     const SuperResolutionEngine* engine = ptp->engine;
     const auto tilesize = ptp->default_config.tilesize;
 
@@ -450,7 +450,7 @@ class SaveThreadParams {
 };
 
 void* save(void* args) {
-    const SaveThreadParams* stp = (const SaveThreadParams*)args;
+    const SaveThreadParams* stp = static_cast<const SaveThreadParams*>(args);
     const int verbose = stp->verbose;
 
     for (;;) {
@@ -464,7 +464,7 @@ void* save(void* args) {
 
         // free input pixel data
         {
-            unsigned char* pixeldata = (unsigned char*)v.inimage.data;
+            unsigned char* pixeldata = static_cast<unsigned char*>(v.inimage.data);
             if (v.webp == 1) {
                 free(pixeldata);
             } else {
@@ -489,7 +489,7 @@ void* save(void* args) {
         int success = 0;
 
         if (ext == PATHSTR(".webp") || ext == PATHSTR(".WEBP")) {
-            success = webp_save(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, (const unsigned char*)v.outimage.data);
+            success = webp_save(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, static_cast<const unsigned char*>(v.outimage.data));
         } else if (ext == PATHSTR(".png") || ext == PATHSTR(".PNG")) {
 #if _WIN32
             success = wic_encode_image(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data);
@@ -509,7 +509,7 @@ void* save(void* args) {
                 stp->logger_info->info(PATHSTR("{} -> {} done, took {}us"), v.inpath, v.outpath, v.elapsed.count());
             }
         } else {
-            stp->logger_error->error(PATHSTR("encode image {} failed"), v.outpath);
+            stp->logger_error->error(PATHSTR("Encode failed: {}"), v.outpath);
         }
     }
 
@@ -892,7 +892,7 @@ int main(int argc, char** argv)
             ltp.logger_info = logger_info;
             ltp.logger_error = logger_error;
 
-            ncnn::Thread load_thread(load, (void*)&ltp);
+            ncnn::Thread load_thread(load, static_cast<void*>(&ltp));
 
             // engine proc
             std::vector<ProcThreadParams> ptp(use_gpu_count);
@@ -917,7 +917,7 @@ int main(int argc, char** argv)
                 int total_jobs_proc_id = 0;
                 for (std::size_t i = 0; i < use_gpu_count; i++) {
                     for (int j = 0; j < jobs_proc[i]; j++) {
-                        proc_threads[total_jobs_proc_id++] = new ncnn::Thread(proc, (void*)&ptp[i]);
+                        proc_threads[total_jobs_proc_id++] = new ncnn::Thread(proc, static_cast<void*>(&ptp[i]));
                     }
                 }
             }
@@ -930,7 +930,7 @@ int main(int argc, char** argv)
 
             std::vector<ncnn::Thread*> save_threads(jobs_save);
             for (int i = 0; i < jobs_save; i++) {
-                save_threads[i] = new ncnn::Thread(save, (void*)&stp);
+                save_threads[i] = new ncnn::Thread(save, static_cast<void*>(&stp));
             }
 
             // end

@@ -255,12 +255,12 @@ std::shared_ptr<SuperResolutionPipelines> RealESRGAN::create_pipelines(int scale
 }
 
 int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
-    const unsigned char* in_data = (const unsigned char*)in.data;
+    const unsigned char* in_data = static_cast<const unsigned char*>(in.data);
     const int w = in.w;
     const int h = in.h;
     const int channels = in.elempack;
 
-    unsigned char* out_data = (unsigned char*)out.data;
+    unsigned char* out_data = static_cast<unsigned char*>(out.data);
 
     // Get parameters from config
     const int scale = config.scale;

@@ -337,7 +337,7 @@ class RealCUGANSyncGapGPU {
         if (ptr_stage2_options != nullptr) {
             // Download output tile
             const auto storage_mode = get_storage_mode(opt);
-            unsigned char* out_data = (unsigned char*)ptr_stage2_options->out.data;
+            unsigned char* out_data = static_cast<unsigned char*>(ptr_stage2_options->out.data);
             ncnn::Mat out_tile_cpu;
 
             if (storage_mode == StorageMode::FP16_INT8) {
@@ -377,7 +377,7 @@ class RealCUGANSyncGapGPU {
         const int TILE_SIZE_Y = tilesize;
         const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
 
-        const unsigned char* in_data = (const unsigned char*)in.data;
+        const unsigned char* in_data = static_cast<const unsigned char*>(in.data);
 
         std::vector<std::string> in_names = RealCUGANSyncGapGPU::generate_feature_names(in_begin, in_end);
         std::vector<std::string> out_names = RealCUGANSyncGapGPU::generate_feature_names(out_begin, out_end);
@@ -585,7 +585,7 @@ class RealCUGANSyncGapGPU {
         const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
         const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;  // Need xtiles for output allocation
 
-        const unsigned char* in_data = (const unsigned char*)in.data;
+        const unsigned char* in_data = static_cast<const unsigned char*>(in.data);
 
         std::vector<std::string> in_names = RealCUGANSyncGapGPU::generate_feature_names(in_begin, in_end);
         std::vector<std::string> out_names = {"out0"};  // Final output name
@@ -655,7 +655,7 @@ class RealCUGANSyncGapGPU {
         const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;
         const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
 
-        const unsigned char* in_data = (const unsigned char*)in.data;
+        const unsigned char* in_data = static_cast<const unsigned char*>(in.data);
 
         std::vector<std::string> in_names = RealCUGANSyncGapGPU::generate_feature_names(in_begin, in_end);
         std::vector<std::string> out_names = RealCUGANSyncGapGPU::generate_feature_names(out_begin, out_end);
@@ -1156,12 +1156,12 @@ int RealCUGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat
 }
 
 int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
-    const unsigned char* in_data = (const unsigned char*)in.data;
+    const unsigned char* in_data = static_cast<const unsigned char*>(in.data);
     const int w = in.w;
     const int h = in.h;
     const int channels = in.elempack;
 
-    unsigned char* out_data = (unsigned char*)out.data;
+    unsigned char* out_data = static_cast<unsigned char*>(out.data);
 
     // Get parameters from config
     const int scale = config.scale;
