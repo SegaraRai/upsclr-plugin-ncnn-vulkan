@@ -49,20 +49,23 @@ namespace fs = std::filesystem;
 static wchar_t* optarg = NULL;
 static int optind = 1;
 static wchar_t getopt(int argc, wchar_t* const argv[], const wchar_t* optstring) {
-    if (optind >= argc || argv[optind][0] != L'-')
+    if (optind >= argc || argv[optind][0] != L'-') {
         return -1;
+    }
 
     wchar_t opt = argv[optind][1];
     const wchar_t* p = wcschr(optstring, opt);
-    if (p == NULL)
+    if (p == NULL) {
         return L'?';
+    }
 
     optarg = NULL;
 
     if (p[1] == L':') {
         optind++;
-        if (optind >= argc)
+        if (optind >= argc) {
             return L'?';
+        }
 
         optarg = argv[optind];
     }
@@ -747,8 +750,9 @@ int main(int argc, char** argv)
         if (path_is_directory(inputpath) && path_is_directory(outputpath)) {
             std::vector<path_t> filenames;
             int lr = list_directory(inputpath, filenames);
-            if (lr != 0)
+            if (lr != 0) {
                 return -1;
+            }
 
             const int count = filenames.size();
             input_files.resize(count);
