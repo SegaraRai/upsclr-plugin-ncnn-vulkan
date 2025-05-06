@@ -7,12 +7,6 @@
 // RealESRGAN class derived from SuperResolutionEngine
 class RealESRGAN final : public SuperResolutionEngine {
    public:
-    // Constructor and destructor
-    RealESRGAN(const SuperResolutionEngineConfig& config);
-    virtual ~RealESRGAN() = default;
-
-    ProcessConfig create_default_process_config() const override;
-
     // Engine information
     static const SuperResolutionEngineInfo& get_engine_info() {
         static const SuperResolutionEngineInfo info{
@@ -31,6 +25,14 @@ class RealESRGAN final : public SuperResolutionEngine {
             .version = "1.0.0"};
         return info;
     }
+
+    // Constructor and destructor
+    RealESRGAN(const SuperResolutionEngineConfig& config);
+    virtual ~RealESRGAN() = default;
+
+    const SuperResolutionEngineInfo& engine_info() const override;
+
+    ProcessConfig create_default_process_config() const override;
 
    protected:
     void prepare_net_options(ncnn::Option& options) const override;

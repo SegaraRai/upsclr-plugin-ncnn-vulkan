@@ -70,12 +70,19 @@ const uint32_t realcugan_4x_postproc_tta_int8s_spv_data[] = {
 #include "shaders/realcugan_4x_postproc_tta_int8s.spv.hex.h"
 };
 
-static constexpr std::array<int, 4> REALCUGAN_PREPADDING_PER_SCALE = {
-    0,   // x1?
-    18,  // x2
-    14,  // x3
-    19,  // x4
-};
+constexpr int get_prepadding_for_scale(int scale) {
+    switch (scale) {
+        case 2:
+            return 18;
+        case 3:
+            return 14;
+        case 4:
+            return 19;
+    }
+
+    // Unsupported scale
+    return 0;
+}
 
 enum class StorageMode {
     FP16_INT8,
@@ -154,6 +161,7 @@ class RealCUGANSyncGapGPU {
     ncnn::Option opt;
     FeatureCache<ncnn::VkMat> cache;
     const ProcessConfig& config;
+    int prepadding;
     const ncnn::Mat& in;  // Reference to input image Mat
     ColorFormat in_format;
     bool tta_mode;
@@ -218,7 +226,7 @@ class RealCUGANSyncGapGPU {
         const int h = in.h;
         const int channels = in.elempack;
         const int scale = config.scale;
-        const int prepadding = REALCUGAN_PREPADDING_PER_SCALE[scale - 1];
+        const int prepadding = this->prepadding;
         const int tilesize = config.tilesize;  // Use config.tilesize for standard stages
 
         const int TILE_SIZE_X = tilesize;
@@ -351,7 +359,7 @@ class RealCUGANSyncGapGPU {
 
    public:
     RealCUGANSyncGapGPU(ncnn::VulkanDevice* vkdev, const ncnn::Net& net, const SuperResolutionPipelines& pipelines, const ncnn::Option& opt, bool tta_mode, const ncnn::Mat& in, ColorFormat in_format, const ProcessConfig& config, std::function<int(const ncnn::VkMat& in_alpha_tile, ncnn::VkMat& out_alpha_tile, int scale, ncnn::VkCompute& cmd, const ncnn::Option& opt)> handle_alpha_channel_gpu)
-        : vkdev(vkdev), net(net), pipelines(pipelines), opt(opt), config(config), in(in), in_format(in_format), tta_mode(tta_mode), handle_alpha_channel_gpu(handle_alpha_channel_gpu) {}
+        : vkdev(vkdev), net(net), pipelines(pipelines), opt(opt), config(config), prepadding(get_prepadding_for_scale(config.scale)), in(in), in_format(in_format), tta_mode(tta_mode), handle_alpha_channel_gpu(handle_alpha_channel_gpu) {}
 
     // --- Standard SE Methods ---
 
@@ -360,7 +368,7 @@ class RealCUGANSyncGapGPU {
         const int h = in.h;
         const int channels = in.elempack;
         const int scale = config.scale;
-        const int prepadding = REALCUGAN_PREPADDING_PER_SCALE[scale - 1];
+        const int prepadding = this->prepadding;
         const int tilesize = config.tilesize;
 
         const int TILE_SIZE_X = tilesize;
@@ -564,7 +572,7 @@ class RealCUGANSyncGapGPU {
         const int h = in.h;
         const int channels = in.elempack;
         const int scale = config.scale;
-        const int prepadding = REALCUGAN_PREPADDING_PER_SCALE[scale - 1];
+        const int prepadding = this->prepadding;
         const int tilesize = config.tilesize;
 
         const int TILE_SIZE_X = tilesize;
@@ -634,7 +642,7 @@ class RealCUGANSyncGapGPU {
         const int h = in.h;
         const int channels = in.elempack;
         const int scale = config.scale;
-        const int prepadding = REALCUGAN_PREPADDING_PER_SCALE[scale - 1];
+        const int prepadding = this->prepadding;
         const int tilesize = RealCUGANSyncGapGPU::VERY_ROUGH_TILE_SIZE;  // Fixed for very_rough
 
         const int TILE_SIZE_X = tilesize;
@@ -900,6 +908,10 @@ RealCUGAN::RealCUGAN(const SuperResolutionEngineConfig& config)
     }
 }
 
+const SuperResolutionEngineInfo& RealCUGAN::engine_info() const {
+    return RealCUGAN::get_engine_info();
+}
+
 ProcessConfig RealCUGAN::create_default_process_config() const {
     // Get engine info
     const auto& info = get_engine_info();
@@ -1146,7 +1158,7 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
     // Get parameters from config
     const int scale = config.scale;
     const int tilesize = config.tilesize;
-    const int prepadding = REALCUGAN_PREPADDING_PER_SCALE[scale - 1];
+    const int prepadding = get_prepadding_for_scale(scale);
 
     if (w < 1 || h < 1 || (channels != 3 && channels != 4) || tilesize < 1 || prepadding < 0 || scale < 1) {
         fprintf(stderr, "ERROR: [RealCUGAN::process_gpu] Invalid input parameters\n");

@@ -351,7 +351,9 @@ class SuperResolutionEngine {
     SuperResolutionEngine(const SuperResolutionEngineConfig& config);
     virtual ~SuperResolutionEngine();
 
-    virtual int warmup(int scale) const;
+    virtual const SuperResolutionEngineInfo& engine_info() const = 0;
+
+    virtual int preload(int scale) const;
 
     // Image processing
     virtual int process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const;

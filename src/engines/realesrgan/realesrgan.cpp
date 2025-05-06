@@ -99,6 +99,10 @@ RealESRGAN::RealESRGAN(const SuperResolutionEngineConfig& config)
     }
 }
 
+const SuperResolutionEngineInfo& RealESRGAN::engine_info() const {
+    return RealESRGAN::get_engine_info();
+}
+
 ProcessConfig RealESRGAN::create_default_process_config() const {
     // Get engine info
     const auto& info = get_engine_info();

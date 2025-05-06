@@ -137,6 +137,11 @@ SuperResolutionEngine::~SuperResolutionEngine() {
 }
 
 int SuperResolutionEngine::process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const {
+    if (!this->engine_info().supports_scale(config.scale)) {
+        fprintf(stderr, "ERROR: [SuperResolutionEngine::process] Unsupported scale %d\n", config.scale);
+        return -1;
+    }
+
     if (this->vkdev != nullptr) {
         return this->process_gpu(in, config.input_format, out, config.output_format, config);
     } else {
@@ -155,18 +160,23 @@ std::shared_ptr<ncnn::Net> SuperResolutionEngine::create_net_base() const {
     return net;
 }
 
-int SuperResolutionEngine::warmup(int scale) const {
+int SuperResolutionEngine::preload(int scale) const {
+    if (!this->engine_info().supports_scale(scale)) {
+        fprintf(stderr, "ERROR: [SuperResolutionEngine::preload] Unsupported scale %d\n", scale);
+        return -1;
+    }
+
     // Get the network for the current scale
     const auto ptr_net = net_cache.get_net(scale);
     if (ptr_net == nullptr) {
-        fprintf(stderr, "ERROR: [SuperResolutionEngine::warmup] Failed to get net for scale %d\n", scale);
+        fprintf(stderr, "ERROR: [SuperResolutionEngine::preload] Failed to get net for scale %d\n", scale);
         return -1;
     }
 
     // Get pipelines for the current scale
     const auto ptr_pipelines = pipeline_cache.get_pipelines(scale);
     if (!ptr_pipelines) {
-        fprintf(stderr, "ERROR: [SuperResolutionEngine::warmup] Failed to get pipelines for scale %d\n", scale);
+        fprintf(stderr, "ERROR: [SuperResolutionEngine::preload] Failed to get pipelines for scale %d\n", scale);
         return -1;
     }
 
@@ -211,6 +221,7 @@ int SuperResolutionEngine::net_load_model(ncnn::Net& net, const std::filesystem:
 #if _WIN32
     FILE* fp = nullptr;
     if (const auto result = _wfopen_s(&fp, path.wstring().c_str(), L"rb"); result != 0) {
+        fwprintf(stderr, L"ERROR: Failed to open model file: %ls\n", path.wstring().c_str());
         return result;
     }
 

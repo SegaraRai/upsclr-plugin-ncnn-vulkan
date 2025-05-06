@@ -10,12 +10,6 @@ class RealCUGANSyncGapGPU;
 // RealCUGAN class derived from SuperResolutionEngine
 class RealCUGAN final : public SuperResolutionEngine {
    public:
-    // Constructor and destructor
-    RealCUGAN(const SuperResolutionEngineConfig& config);
-    virtual ~RealCUGAN() = default;
-
-    ProcessConfig create_default_process_config() const override;
-
     // Engine information
     static const SuperResolutionEngineInfo& get_engine_info() {
         static const SuperResolutionEngineInfo info{
@@ -37,6 +31,14 @@ class RealCUGAN final : public SuperResolutionEngine {
             .version = "1.0.0"};
         return info;
     }
+
+    // Constructor and destructor
+    RealCUGAN(const SuperResolutionEngineConfig& config);
+    virtual ~RealCUGAN() = default;
+
+    const SuperResolutionEngineInfo& engine_info() const override;
+
+    ProcessConfig create_default_process_config() const override;
 
    protected:
     void prepare_net_options(ncnn::Option& options) const override;
