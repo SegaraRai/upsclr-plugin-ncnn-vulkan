@@ -159,13 +159,15 @@ class RealCUGANSyncGapGPU {
     const ncnn::Net& net;
     const SuperResolutionPipelines& pipelines;
     ncnn::Option opt;
-    FeatureCache<ncnn::VkMat> cache;
+    std::shared_ptr<spdlog::logger> logger_error;
     const ProcessConfig& config;
     int prepadding;
     const ncnn::Mat& in;  // Reference to input image Mat
     ColorFormat in_format;
     bool tta_mode;
     std::function<int(const ncnn::VkMat& in_alpha_tile, ncnn::VkMat& out_alpha_tile, int scale, ncnn::VkCompute& cmd, const ncnn::Option& opt)> handle_alpha_channel_gpu;
+
+    FeatureCache<ncnn::VkMat> cache;
 
     // Helper to generate feature names like "gap0", "gap1" etc.
     static std::vector<std::string> generate_feature_names(int begin, int end) {
@@ -177,7 +179,7 @@ class RealCUGANSyncGapGPU {
         return names;
     }
 
-    static void extract_features_sync_gap(const ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, const std::vector<std::string>& in_names, const std::vector<std::string>& out_names, FeatureCache<ncnn::VkMat>& cache, int yi, int xi, int ti, ncnn::VkCompute& cmd) {
+    void extract_features_sync_gap(const ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, const std::vector<std::string>& in_names, const std::vector<std::string>& out_names, FeatureCache<ncnn::VkMat>& cache, int yi, int xi, int ti, ncnn::VkCompute& cmd) {
         ncnn::Extractor ex = net.create_extractor();
 
         ex.set_blob_vkallocator(options.blob_vkallocator);
@@ -194,7 +196,7 @@ class RealCUGANSyncGapGPU {
                 ex.input(name.c_str(), feat);
             } else {
                 // Handle missing input features if necessary (e.g., log warning)
-                fprintf(stderr, "Warning: Missing input feature '%s' for tile (%d, %d, %d)\n", name.c_str(), yi, xi, ti);
+                this->logger_error->warn("[{}] Missing input feature '{}' for tile ({}, {}, {})", __func__, name, yi, xi, ti);
             }
         }
 
@@ -358,8 +360,8 @@ class RealCUGANSyncGapGPU {
     }  // End process_tile_stage0_or_2
 
    public:
-    RealCUGANSyncGapGPU(ncnn::VulkanDevice* vkdev, const ncnn::Net& net, const SuperResolutionPipelines& pipelines, const ncnn::Option& opt, bool tta_mode, const ncnn::Mat& in, ColorFormat in_format, const ProcessConfig& config, std::function<int(const ncnn::VkMat& in_alpha_tile, ncnn::VkMat& out_alpha_tile, int scale, ncnn::VkCompute& cmd, const ncnn::Option& opt)> handle_alpha_channel_gpu)
-        : vkdev(vkdev), net(net), pipelines(pipelines), opt(opt), config(config), prepadding(get_prepadding_for_scale(config.scale)), in(in), in_format(in_format), tta_mode(tta_mode), handle_alpha_channel_gpu(handle_alpha_channel_gpu) {}
+    RealCUGANSyncGapGPU(ncnn::VulkanDevice* vkdev, const ncnn::Net& net, const SuperResolutionPipelines& pipelines, const ncnn::Option& opt, std::shared_ptr<spdlog::logger> logger_error, bool tta_mode, const ncnn::Mat& in, ColorFormat in_format, const ProcessConfig& config, std::function<int(const ncnn::VkMat& in_alpha_tile, ncnn::VkMat& out_alpha_tile, int scale, ncnn::VkCompute& cmd, const ncnn::Option& opt)> handle_alpha_channel_gpu)
+        : vkdev(vkdev), net(net), pipelines(pipelines), opt(opt), logger_error(logger_error), config(config), prepadding(get_prepadding_for_scale(config.scale)), in(in), in_format(in_format), tta_mode(tta_mode), handle_alpha_channel_gpu(handle_alpha_channel_gpu) {}
 
     // --- Standard SE Methods ---
 
@@ -429,6 +431,9 @@ class RealCUGANSyncGapGPU {
         const int t_count = this->tta_mode ? 8 : 1;
 
         std::vector<std::string> names = generate_feature_names(gap_begin, gap_end);
+        if (names.empty()) {
+            return 0;  // Nothing to sync
+        }
 
         std::vector<std::vector<ncnn::VkMat>> feats_gpu(names.size());
         int tile_count = 0;
@@ -452,7 +457,7 @@ class RealCUGANSyncGapGPU {
         }
         const int total_tiles_to_average = tile_count * t_count;
         if (total_tiles_to_average == 0 || feats_gpu.empty() || feats_gpu[0].empty()) {
-            fprintf(stderr, "Warning: [sync_gap] No features found in cache to sync for gaps %d to %d.\n", gap_begin, gap_end);
+            this->logger_error->warn("[{}] No features found in cache to sync for gaps {} to {}.", __func__, gap_begin, gap_end);
             return 0;  // Nothing to sync
         }
 
@@ -753,6 +758,9 @@ class RealCUGANSyncGapGPU {
         const int t_count = this->tta_mode ? 8 : 1;
 
         std::vector<std::string> names = RealCUGANSyncGapGPU::generate_feature_names(gap_begin, gap_end);
+        if (names.empty()) {
+            return 0;  // Nothing to sync
+        }
 
         std::vector<std::vector<ncnn::VkMat>> feats_gpu(names.size());
         int processed_tile_count = 0;  // Count only tiles processed in very_rough_stage0
@@ -777,7 +785,7 @@ class RealCUGANSyncGapGPU {
 
         const int total_tiles_to_average = processed_tile_count * t_count;
         if (total_tiles_to_average == 0 || feats_gpu.empty() || feats_gpu[0].empty()) {
-            fprintf(stderr, "Warning: [very_rough_sync_gap] No features found in cache to sync for gaps %d to %d.\n", gap_begin, gap_end);
+            this->logger_error->warn("[{}] No features found in cache to sync for gaps {} to {}.", __func__, gap_begin, gap_end);
             return 0;  // Nothing to sync
         }
 
@@ -904,7 +912,7 @@ RealCUGAN::RealCUGAN(const SuperResolutionEngineConfig& config)
     // Validate config against engine info
     const auto& info = get_engine_info();
     if (!info.is_compatible_config(config)) {
-        fprintf(stderr, "WARNING: Configuration may not be fully compatible with RealCUGAN engine\n");
+        this->config.logger_error->warn("[{}] Configuration may not be fully compatible with RealCUGAN engine", __func__);
     }
 }
 
@@ -949,7 +957,7 @@ void RealCUGAN::prepare_net_options(ncnn::Option& options) const {
     options.use_int8_arithmetic = false;
 }
 
-std::string RealCUGAN::get_model_path(const std::string& model_type, int scale, int noise) {
+std::string RealCUGAN::get_model_path(const std::string& model_type, int scale, int noise) const {
     constexpr const char* NOISE_SUFFIXES_DEFAULT[] = {
         "conservative",
         "no-denoise",
@@ -964,7 +972,7 @@ std::string RealCUGAN::get_model_path(const std::string& model_type, int scale, 
     };
 
     if (scale < 2 || scale > 4) {
-        fprintf(stderr, "WARNING: Scale %d is not officially supported by RealCUGAN\n", scale);
+        this->config.logger_error->warn("[{}] Scale {} is not officially supported by RealCUGAN", __func__, scale);
         return "";
     }
 
@@ -972,10 +980,10 @@ std::string RealCUGAN::get_model_path(const std::string& model_type, int scale, 
 
     std::string current_type = model_type;
     if (current_type == "models-nose" && (scale != 2)) {
-        fprintf(stderr, "WARNING: models-nose does not support scale %d, falling back to models-se\n", scale);
+        this->config.logger_error->warn("[{}] models-nose does not support scale {}, falling back to models-se", __func__, scale);
         current_type = "models-se";
     } else if (current_type == "models-pro" && (scale != 2 && scale != 3)) {
-        fprintf(stderr, "WARNING: models-pro does not support scale %d, falling back to models-se\n", scale);
+        this->config.logger_error->warn("[{}] models-pro does not support scale {}, falling back to models-se", __func__, scale);
         current_type = "models-se";
     }
 
@@ -996,7 +1004,7 @@ std::shared_ptr<ncnn::Net> RealCUGAN::create_net(int scale, const NetCache& net_
 
     // Check if scale is supported
     if (!info.supports_scale(scale)) {
-        fprintf(stderr, "WARNING: Scale %d is not officially supported by RealCUGAN\n", scale);
+        this->config.logger_error->warn("[{}] Scale {} is not officially supported by RealCUGAN", __func__, scale);
     }
 
     // Use default model if none specified
@@ -1004,7 +1012,7 @@ std::shared_ptr<ncnn::Net> RealCUGAN::create_net(int scale, const NetCache& net_
 
     // Check if model is supported
     if (!info.supports_model(model_name)) {
-        fprintf(stderr, "WARNING: Model '%s' is not officially supported by RealCUGAN\n", model_name.c_str());
+        this->config.logger_error->warn("[{}] Model '{}' is not officially supported by RealCUGAN", __func__, model_name);
     }
 
     // Get model path based on model type, scale and noise
@@ -1161,13 +1169,13 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
     const int prepadding = get_prepadding_for_scale(scale);
 
     if (w < 1 || h < 1 || (channels != 3 && channels != 4) || tilesize < 1 || prepadding < 0 || scale < 1) {
-        fprintf(stderr, "ERROR: [RealCUGAN::process_gpu] Invalid input parameters\n");
+        this->config.logger_error->error("[{}] Invalid input parameters: w={}, h={}, channels={}, tilesize={}, prepadding={}, scale={}", __func__, w, h, channels, tilesize, prepadding, scale);
         return -1;
     }
 
     // Check if output dimensions are correct
     if (out.w != w * scale || out.h != h * scale || out.elempack != channels) {
-        fprintf(stderr, "ERROR: [RealCUGAN::process_gpu] Output dimensions do not match input dimensions\n");
+        this->config.logger_error->error("[{}] Output dimensions do not match input dimensions: expected (w={}, h={}, channels={}), got (w={}, h={}, channels={})", __func__, w * scale, h * scale, channels, out.w, out.h, out.elempack);
         return -1;
     }
 
@@ -1177,14 +1185,14 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
     // Get the network for the current scale
     const auto ptr_net = net_cache.get_net(scale);
     if (ptr_net == nullptr) {
-        fprintf(stderr, "ERROR: [RealCUGAN::process_gpu] Failed to get net for scale %d\n", scale);
+        this->config.logger_error->error("[{}] Failed to get net for scale {}", __func__, scale);
         return -1;
     }
 
     // Get pipelines for the current scale
     const auto ptr_pipelines = pipeline_cache.get_pipelines(scale);
     if (!ptr_pipelines) {
-        fprintf(stderr, "ERROR: [RealCUGAN::process_gpu] Failed to get pipelines for scale %d\n", scale);
+        this->config.logger_error->error("[{}] Failed to get pipelines for scale {}", __func__, scale);
         return -1;
     }
     const auto& pipelines = *ptr_pipelines;
@@ -1192,12 +1200,12 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
     // Create allocators
     ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
     if (blob_vkallocator == nullptr) {
-        fprintf(stderr, "ERROR: [RealCUGAN::process_gpu] Failed to acquire blob allocator\n");
+        this->config.logger_error->error("[{}] Failed to acquire blob allocator", __func__);
         return -1;
     }
     ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
     if (staging_vkallocator == nullptr) {
-        fprintf(stderr, "ERROR: [RealCUGAN::process_gpu] Failed to acquire staging allocator\n");
+        this->config.logger_error->error("[{}] Failed to acquire staging allocator", __func__);
         vkdev->reclaim_blob_allocator(blob_vkallocator);
         return -1;
     }
@@ -1388,7 +1396,7 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
     // Get the network for the current scale
     const auto ptr_net = this->net_cache.get_net(config.scale);
     if (ptr_net == nullptr) {
-        fprintf(stderr, "ERROR: [RealCUGAN::create_sync_gap_gpu] Failed to get net for scale %d\n", config.scale);
+        this->config.logger_error->error("[{}] Failed to get net for scale {}", __func__, config.scale);
         return nullptr;
     }
     const auto& net = *ptr_net;
@@ -1396,7 +1404,7 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
     // Get pipelines for the current scale
     const auto ptr_pipelines = this->pipeline_cache.get_pipelines(config.scale);
     if (!ptr_pipelines) {
-        fprintf(stderr, "ERROR: [RealCUGAN::create_sync_gap_gpu] Failed to get pipelines for scale %d\n", config.scale);
+        this->config.logger_error->error("[{}] Failed to get pipelines for scale {}", __func__, config.scale);
         return nullptr;
     }
     const auto& pipelines = *ptr_pipelines;
@@ -1406,12 +1414,12 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
     // Create allocators
     ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
     if (blob_vkallocator == nullptr) {
-        fprintf(stderr, "ERROR: [RealCUGAN::create_sync_gap_gpu] Failed to acquire blob allocator\n");
+        this->config.logger_error->error("[{}] Failed to acquire blob allocator", __func__);
         return nullptr;
     }
     ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
     if (staging_vkallocator == nullptr) {
-        fprintf(stderr, "ERROR: [RealCUGAN::create_sync_gap_gpu] Failed to acquire staging allocator\n");
+        this->config.logger_error->error("[{}] Failed to acquire staging allocator", __func__);
         vkdev->reclaim_blob_allocator(blob_vkallocator);
         return nullptr;
     }
@@ -1422,7 +1430,7 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
     opt.staging_vkallocator = staging_vkallocator;
 
     return std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>>(
-        new RealCUGANSyncGapGPU(vkdev, net, pipelines, opt, this->config.tta_mode, in, in_format, config, std::bind(&RealCUGAN::handle_alpha_channel_gpu, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5)),
+        new RealCUGANSyncGapGPU(vkdev, net, pipelines, opt, this->config.logger_error, this->config.tta_mode, in, in_format, config, std::bind(&RealCUGAN::handle_alpha_channel_gpu, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5)),
         [vkdev, blob_vkallocator, staging_vkallocator](RealCUGANSyncGapGPU* ptr) {
             delete ptr;
 
@@ -1435,7 +1443,7 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
 int RealCUGAN::process_gpu_se(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
     const auto sg = this->create_sync_gap_gpu(in, in_format, config);
     if (!sg) {
-        fprintf(stderr, "ERROR: [RealCUGAN::process_gpu_se] Failed to create sync gap GPU\n");
+        this->config.logger_error->error("[{}] Failed to create GPU sync gap processor", __func__);
         return -1;
     }
 
@@ -1472,7 +1480,7 @@ int RealCUGAN::process_gpu_se(const ncnn::Mat& in, ColorFormat in_format, ncnn::
 int RealCUGAN::process_gpu_se_rough(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
     const auto sg = this->create_sync_gap_gpu(in, in_format, config);
     if (!sg) {
-        fprintf(stderr, "ERROR: [RealCUGAN::process_gpu_se_rough] Failed to create sync gap GPU\n");
+        this->config.logger_error->error("[{}] Failed to create GPU sync gap processor", __func__);
         return -1;
     }
 
@@ -1491,7 +1499,7 @@ int RealCUGAN::process_gpu_se_rough(const ncnn::Mat& in, ColorFormat in_format, 
 int RealCUGAN::process_gpu_se_very_rough(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
     const auto sg = this->create_sync_gap_gpu(in, in_format, config);
     if (!sg) {
-        fprintf(stderr, "ERROR: [RealCUGAN::process_gpu_se_very_rough] Failed to create sync gap GPU\n");
+        this->config.logger_error->error("[{}] Failed to create GPU sync gap processor", __func__);
         return -1;
     }
 

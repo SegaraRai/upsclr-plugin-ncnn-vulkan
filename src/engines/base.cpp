@@ -1,6 +1,8 @@
 // Super-resolution base class implementation
 #include "base.hpp"
 
+#include "fmt/xchar.h"
+
 #include <algorithm>
 #include <stdexcept>
 #include <vector>
@@ -109,7 +111,7 @@ SuperResolutionEngine::SuperResolutionEngine(const SuperResolutionEngineConfig& 
       net_cache([this](int scale) {
           auto net = this->create_net(scale, this->net_cache);
           if (net == nullptr) {
-              fprintf(stderr, "ERROR: create_net returned nullptr for scale=%d\n", scale);
+              this->config.logger_error->error("create_net returned nullptr for scale {}", scale);
               return std::shared_ptr<ncnn::Net>();
           }
           return net;
@@ -117,7 +119,7 @@ SuperResolutionEngine::SuperResolutionEngine(const SuperResolutionEngineConfig& 
       pipeline_cache([this](int scale) {
           auto pipelines = this->create_pipelines(scale, this->pipeline_cache);
           if (pipelines == nullptr) {
-              fprintf(stderr, "ERROR: create_pipelines returned nullptr for scale=%d\n", scale);
+              this->config.logger_error->error("create_pipelines returned nullptr for scale {}", scale);
               return std::shared_ptr<SuperResolutionPipelines>();
           }
 
@@ -138,7 +140,7 @@ SuperResolutionEngine::~SuperResolutionEngine() {
 
 int SuperResolutionEngine::process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const {
     if (!this->engine_info().supports_scale(config.scale)) {
-        fprintf(stderr, "ERROR: [SuperResolutionEngine::process] Unsupported scale %d\n", config.scale);
+        this->config.logger_error->error("[{}] Unsupported scale {}", __func__, config.scale);
         return -1;
     }
 
@@ -162,21 +164,21 @@ std::shared_ptr<ncnn::Net> SuperResolutionEngine::create_net_base() const {
 
 int SuperResolutionEngine::preload(int scale) const {
     if (!this->engine_info().supports_scale(scale)) {
-        fprintf(stderr, "ERROR: [SuperResolutionEngine::preload] Unsupported scale %d\n", scale);
+        this->config.logger_error->error("[{}] Unsupported scale {}", __func__, scale);
         return -1;
     }
 
     // Get the network for the current scale
     const auto ptr_net = net_cache.get_net(scale);
     if (ptr_net == nullptr) {
-        fprintf(stderr, "ERROR: [SuperResolutionEngine::preload] Failed to get net for scale %d\n", scale);
+        this->config.logger_error->error("[{}] Failed to get net for scale {}", __func__, scale);
         return -1;
     }
 
     // Get pipelines for the current scale
     const auto ptr_pipelines = pipeline_cache.get_pipelines(scale);
     if (!ptr_pipelines) {
-        fprintf(stderr, "ERROR: [SuperResolutionEngine::preload] Failed to get pipelines for scale %d\n", scale);
+        this->config.logger_error->error("[{}] Failed to get pipelines for scale {}", __func__, scale);
         return -1;
     }
 
@@ -186,7 +188,7 @@ int SuperResolutionEngine::preload(int scale) const {
 int SuperResolutionEngine::process_cpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
     // Base class provides an empty implementation
     // Derived classes should override this method
-    fprintf(stderr, "ERROR: SuperResolutionEngine::process_cpu not implemented\n");
+    this->config.logger_error->error("[{}] process_cpu not implemented", __func__);
     return -1;
 }
 
@@ -210,18 +212,18 @@ int SuperResolutionEngine::handle_alpha_channel_gpu(const ncnn::VkMat& in_alpha_
 
     const auto ptr_bicubic = this->bicubic_layers.get_bicubic(scale);
     if (ptr_bicubic == nullptr) {
-        fprintf(stderr, "ERROR: Failed to get bicubic layer for scale %d\n", scale);
+        this->config.logger_error->error("[{}] Failed to get bicubic layer for scale {}", __func__, scale);
         return -1;
     }
     ptr_bicubic->forward(in_alpha_tile, out_alpha_tile, cmd, opt);
     return 0;
 }
 
-int SuperResolutionEngine::net_load_model(ncnn::Net& net, const std::filesystem::path& path) {
+int SuperResolutionEngine::net_load_model(ncnn::Net& net, const std::filesystem::path& path) const {
 #if _WIN32
     FILE* fp = nullptr;
     if (const auto result = _wfopen_s(&fp, path.wstring().c_str(), L"rb"); result != 0) {
-        fwprintf(stderr, L"ERROR: Failed to open model file: %ls\n", path.wstring().c_str());
+        this->config.logger_error->error(L"[net_load_model] Failed to open model file: {}", path.wstring());
         return result;
     }
 
@@ -232,17 +234,17 @@ int SuperResolutionEngine::net_load_model(ncnn::Net& net, const std::filesystem:
 #else
     const auto result = net.load_model(path.c_str());
     if (result != 0) {
-        fprintf(stderr, "ERROR: Failed to load model file: %s\n", path.string().c_str());
+        this->config.logger_error->error("[{}] Failed to load model file: {}", __func__, path.string());
     }
     return result;
 #endif
 }
 
-int SuperResolutionEngine::net_load_param(ncnn::Net& net, const std::filesystem::path& path) {
+int SuperResolutionEngine::net_load_param(ncnn::Net& net, const std::filesystem::path& path) const {
 #if _WIN32
     FILE* fp = nullptr;
     if (const auto result = _wfopen_s(&fp, path.wstring().c_str(), L"rb"); result != 0) {
-        fwprintf(stderr, L"ERROR: Failed to open param file: %ls\n", path.wstring().c_str());
+        this->config.logger_error->error(L"[net_load_param] Failed to open param file: {}", path.wstring());
         return result;
     }
 
@@ -253,13 +255,13 @@ int SuperResolutionEngine::net_load_param(ncnn::Net& net, const std::filesystem:
 #else
     const auto result = net.load_param(path.c_str());
     if (result != 0) {
-        fprintf(stderr, "ERROR: Failed to load param file: %s\n", path.string().c_str());
+        this->config.logger_error->error("[{}] Failed to load param file: {}", __func__, path.string());
     }
     return result;
 #endif
 }
 
-int SuperResolutionEngine::net_load_model_and_param(ncnn::Net& net, const std::filesystem::path& path) {
+int SuperResolutionEngine::net_load_model_and_param(ncnn::Net& net, const std::filesystem::path& path) const {
     auto p = path;
 
     if (const auto result = SuperResolutionEngine::net_load_param(net, p.replace_extension(".param")); result != 0) {

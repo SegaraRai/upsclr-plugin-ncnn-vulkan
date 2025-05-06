@@ -95,7 +95,7 @@ RealESRGAN::RealESRGAN(const SuperResolutionEngineConfig& config)
     // Validate config against engine info
     const auto& info = get_engine_info();
     if (!info.is_compatible_config(config)) {
-        fprintf(stderr, "WARNING: Configuration may not be fully compatible with RealESRGAN engine\n");
+        this->config.logger_error->warn("[{}] Configuration may not be fully compatible with RealESRGAN engine", __func__);
     }
 }
 
@@ -149,7 +149,7 @@ std::shared_ptr<ncnn::Net> RealESRGAN::create_net(int scale, const NetCache& net
 
     // Check if model is supported
     if (!info.supports_model(model_name)) {
-        fprintf(stderr, "WARNING: Model '%s' is not officially supported by RealESRGAN\n", model_name.c_str());
+        this->config.logger_error->error("Model '{}' is not supported by RealESRGAN", model_name);
     }
 
     std::string basename;
@@ -268,13 +268,13 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
     const int prepadding = REALESRGAN_PREPADDING;
 
     if (w < 1 || h < 1 || (channels != 3 && channels != 4) || tilesize < 1 || prepadding < 0 || scale < 1) {
-        fprintf(stderr, "ERROR: [RealESRGAN::process_gpu] Invalid input parameters\n");
+        this->config.logger_error->error("[{}] Invalid input parameters: w={}, h={}, channels={}, tilesize={}, prepadding={}, scale={}", __func__, w, h, channels, tilesize, prepadding, scale);
         return -1;
     }
 
     // Check if output dimensions are correct
     if (out.w != w * scale || out.h != h * scale || out.elempack != channels) {
-        fprintf(stderr, "ERROR: [RealESRGAN::process_gpu] Output dimensions do not match input dimensions\n");
+        this->config.logger_error->error("[{}] Output dimensions do not match input dimensions: expected (w={}, h={}, channels={}), got (w={}, h={}, channels={})", __func__, w * scale, h * scale, channels, out.w, out.h, out.elempack);
         return -1;
     }
 
@@ -284,14 +284,14 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
     // Get the network for the current scale
     const auto ptr_net = net_cache.get_net(scale);
     if (ptr_net == nullptr) {
-        fprintf(stderr, "ERROR: [RealESRGAN::process_gpu] Failed to get net for scale %d\n", scale);
+        this->config.logger_error->error("[{}] Failed to get net for scale {}", __func__, scale);
         return -1;
     }
 
     // Get pipelines for the current scale
     const auto ptr_pipelines = pipeline_cache.get_pipelines(scale);
     if (!ptr_pipelines) {
-        fprintf(stderr, "ERROR: [RealESRGAN::process_gpu] Failed to get pipelines for scale %d\n", scale);
+        this->config.logger_error->error("[{}] Failed to get pipelines for scale {}", __func__, scale);
         return -1;
     }
     const auto& pipelines = *ptr_pipelines;
@@ -299,12 +299,12 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
     // Create allocators
     ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
     if (blob_vkallocator == nullptr) {
-        fprintf(stderr, "ERROR: [RealESRGAN::process_gpu] Failed to acquire blob allocator\n");
+        this->config.logger_error->error("[{}] Failed to acquire blob allocator", __func__);
         return -1;
     }
     ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
     if (staging_vkallocator == nullptr) {
-        fprintf(stderr, "ERROR: [RealESRGAN::process_gpu] Failed to acquire staging allocator\n");
+        this->config.logger_error->error("[{}] Failed to acquire staging allocator", __func__);
         vkdev->reclaim_blob_allocator(blob_vkallocator);
         return -1;
     }

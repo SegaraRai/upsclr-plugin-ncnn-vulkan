@@ -125,6 +125,16 @@ add_executable(upsclr-ncnn-vulkan
     src/engines/realcugan/realcugan.cpp
 )
 
+if(WIN32)
+    target_compile_definitions(upsclr-ncnn-vulkan-lib PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
+    target_compile_definitions(upsclr-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
+
+    target_compile_options(upsclr-ncnn-vulkan-lib PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+    target_compile_options(upsclr-ncnn-vulkan PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+
+    target_sources(upsclr-ncnn-vulkan PRIVATE src/win_utf8.cpp)
+endif()
+
 find_package(Vulkan REQUIRED)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE Vulkan::Vulkan)
 target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE Vulkan::Vulkan)
@@ -138,6 +148,10 @@ target_include_directories(upsclr-ncnn-vulkan PRIVATE ${Stb_INCLUDE_DIR})
 
 find_package(WebP CONFIG REQUIRED)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
+
+find_package(spdlog CONFIG REQUIRED)
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
+target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE spdlog::spdlog_header_only)
 
 add_dependencies(upsclr-ncnn-vulkan generate-spirv)
 add_dependencies(upsclr-ncnn-vulkan-lib generate-spirv)

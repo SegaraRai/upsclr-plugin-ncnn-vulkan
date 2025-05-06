@@ -7,6 +7,9 @@
 #include <queue>
 #include <vector>
 
+#include "spdlog/sinks/stdout_color_sinks.h"
+#include "spdlog/spdlog.h"
+
 namespace fs = std::filesystem;
 
 #if _WIN32
@@ -203,6 +206,9 @@ class LoadThreadParams {
     // session data
     std::vector<path_t> input_files;
     std::vector<path_t> output_files;
+
+    std::shared_ptr<spdlog::logger> logger_info;
+    std::shared_ptr<spdlog::logger> logger_error;
 };
 
 void* load(void* args) {
@@ -299,20 +305,12 @@ void* load(void* args) {
             if (c == 4 && (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") || ext == PATHSTR("JPEG"))) {
                 path_t output_filename2 = ltp->output_files[i] + PATHSTR(".png");
                 v.outpath = output_filename2;
-#if _WIN32
-                fwprintf(stderr, L"image %ls has alpha channel ! %ls will output %ls\n", imagepath.c_str(), imagepath.c_str(), output_filename2.c_str());
-#else   // _WIN32
-                fprintf(stderr, "image %s has alpha channel ! %s will output %s\n", imagepath.c_str(), imagepath.c_str(), output_filename2.c_str());
-#endif  // _WIN32
+                ltp->logger_error->warn(PATHSTR("image {} has alpha channel! {} will output {}"), imagepath, imagepath, output_filename2);
             }
 
             toproc.put(v);
         } else {
-#if _WIN32
-            fwprintf(stderr, L"decode image %ls failed\n", imagepath.c_str());
-#else   // _WIN32
-            fprintf(stderr, "decode image %s failed\n", imagepath.c_str());
-#endif  // _WIN32
+            ltp->logger_error->error(PATHSTR("decode image {} failed"), imagepath);
         }
     }
 
@@ -359,6 +357,9 @@ void* proc(void* args) {
 class SaveThreadParams {
    public:
     int verbose;
+
+    std::shared_ptr<spdlog::logger> logger_info;
+    std::shared_ptr<spdlog::logger> logger_error;
 };
 
 void* save(void* args) {
@@ -396,7 +397,7 @@ void* save(void* args) {
         fs::path fs_path = fs::absolute(v.outpath);
         std::string parent_path = fs_path.parent_path().string();
         if (fs::exists(parent_path) != 1) {
-            std::cout << "Create folder: [" << parent_path << "]." << std::endl;
+            stp->logger_info->info("Create folder: [{}]", parent_path);
             fs::create_directories(parent_path);
         }
 
@@ -417,23 +418,22 @@ void* save(void* args) {
         }
         if (success) {
             if (verbose) {
-#if _WIN32
-                fwprintf(stdout, L"%ls -> %ls done, took %lldus\n", v.inpath.c_str(), v.outpath.c_str(), v.elapsed.count());
-#else
-                fprintf(stdout, "%s -> %s done, took %lldus\n", v.inpath.c_str(), v.outpath.c_str(), v.elapsed.count());
-#endif
+                stp->logger_info->info(PATHSTR("{} -> {} done, took {}us"), v.inpath, v.outpath, v.elapsed.count());
             }
         } else {
-#if _WIN32
-            fwprintf(stderr, L"encode image %ls failed\n", v.outpath.c_str());
-#else
-            fprintf(stderr, "encode image %s failed\n", v.outpath.c_str());
-#endif
+            stp->logger_error->error(PATHSTR("encode image {} failed"), v.outpath);
         }
     }
 
     return 0;
 }
+
+namespace {
+std::wstring tow(const std::string& ascii_str) {
+    std::wstring wstr(ascii_str.begin(), ascii_str.end());
+    return wstr;
+}
+}  // namespace
 
 #if _WIN32
 int wmain(int argc, wchar_t** argv)
@@ -441,6 +441,9 @@ int wmain(int argc, wchar_t** argv)
 int main(int argc, char** argv)
 #endif
 {
+    auto logger_info = spdlog::stdout_color_mt("console");
+    auto logger_error = spdlog::stderr_color_mt("stderr");
+
     path_t inputpath;
     path_t outputpath;
     int scale = 4;
@@ -577,30 +580,30 @@ int main(int argc, char** argv)
     }
 
     if (tilesize.size() != (gpuid.empty() ? 1 : gpuid.size()) && !tilesize.empty()) {
-        fprintf(stderr, "invalid tilesize argument\n");
+        logger_error->error("Invalid tilesize argument");
         return -1;
     }
 
     for (int i = 0; i < (int)tilesize.size(); i++) {
         if (tilesize[i] != 0 && tilesize[i] < 32) {
-            fprintf(stderr, "invalid tilesize argument\n");
+            logger_error->error("Invalid tilesize argument");
             return -1;
         }
     }
 
     if (jobs_load < 1 || jobs_save < 1) {
-        fprintf(stderr, "invalid thread count argument\n");
+        logger_error->error("Invalid thread count argument");
         return -1;
     }
 
     if (jobs_proc.size() != (gpuid.empty() ? 1 : gpuid.size()) && !jobs_proc.empty()) {
-        fprintf(stderr, "invalid jobs_proc thread count argument\n");
+        logger_error->error("Invalid jobs_proc thread count argument");
         return -1;
     }
 
     for (int i = 0; i < (int)jobs_proc.size(); i++) {
         if (jobs_proc[i] < 1) {
-            fprintf(stderr, "invalid jobs_proc thread count argument\n");
+            logger_error->error("Invalid jobs_proc thread count argument");
             return -1;
         }
     }
@@ -616,13 +619,13 @@ int main(int argc, char** argv)
         } else if (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") || ext == PATHSTR("JPEG")) {
             format = PATHSTR("jpg");
         } else {
-            fprintf(stderr, "invalid outputpath extension type\n");
+            logger_error->error(PATHSTR("Invalid output path extension: '{}'"), ext);
             return -1;
         }
     }
 
     if (format != PATHSTR("png") && format != PATHSTR("webp") && format != PATHSTR("jpg")) {
-        fprintf(stderr, "invalid format argument\n");
+        logger_error->error(PATHSTR("Invalid output format: '{}'"), format);
         return -1;
     }
 
@@ -650,11 +653,7 @@ int main(int argc, char** argv)
                 // filename list is sorted, check if output image path conflicts
                 if (filename_noext == last_filename_noext) {
                     path_t output_filename2 = filename + PATHSTR('.') + format;
-#if _WIN32
-                    fwprintf(stderr, L"both %ls and %ls output %ls ! %ls will output %ls\n", filename.c_str(), last_filename.c_str(), output_filename.c_str(), filename.c_str(), output_filename2.c_str());
-#else
-                    fprintf(stderr, "both %s and %s output %s ! %s will output %s\n", filename.c_str(), last_filename.c_str(), output_filename.c_str(), filename.c_str(), output_filename2.c_str());
-#endif
+                    logger_error->warn(PATHSTR("Image {} has same name with {}! {} will output {}"), filename, last_filename, filename, output_filename2);
                     output_filename = output_filename2;
                 } else {
                     last_filename = filename;
@@ -668,7 +667,7 @@ int main(int argc, char** argv)
             input_files.push_back(inputpath);
             output_files.push_back(outputpath);
         } else {
-            fprintf(stderr, "inputpath and outputpath must be either file or directory at the same time\n");
+            logger_error->error("inputpath and outputpath must be either file or directory at the same time");
             return -1;
         }
     }
@@ -684,8 +683,7 @@ int main(int argc, char** argv)
     }
 
     if (!engine_found) {
-        fprintf(stderr, "Unknown engine: '%s'\n\n", engine_name.c_str());
-        print_usage();
+        logger_error->error("Unknown engine: '{}'", engine_name);
         return -1;
     }
 
@@ -724,7 +722,7 @@ int main(int argc, char** argv)
     int gpu_count = ncnn::get_gpu_count();
     for (int i = 0; i < use_gpu_count; i++) {
         if (gpuid[i] < 0 || gpuid[i] >= gpu_count) {
-            fprintf(stderr, "invalid gpu device\n");
+            logger_error->error("Invalid gpu device: {} (expected: 0-{})", gpuid[i], gpu_count - 1);
 
             ncnn::destroy_gpu_instance();
             return -1;
@@ -752,16 +750,22 @@ int main(int argc, char** argv)
 
                 .noise = noise,
                 .syncgap = syncgap,
+
+                .logger_info = logger_info,
+                .logger_error = logger_error,
             };
 
-            printf("Creating %s instance for gpuid=%d, model=%s, model_dir=%s\n",
-                   engine_name.c_str(), config.gpuid, config.model.c_str(), config.model_dir.string().c_str());
+#if _WIN32
+            logger_info->info(L"Creating {} instance for gpuid={}, model={}, model_dir={}", tow(engine_name), config.gpuid, tow(config.model), config.model_dir.wstring());
+#else
+            logger_info->info("Creating {} instance for gpuid={}, model={}, model_dir={}", engine_name, config.gpuid, config.model, config.model_dir.string());
+#endif
 
             auto engine = SuperResolutionEngineFactory::create_engine(engine_name, config);
 
             // Check if the instance was created successfully
             if (engine == nullptr) {
-                printf("ERROR: Failed to create %s instance for gpuid=%d\n", engine_name.c_str(), config.gpuid);
+                logger_error->error("Failed to create {} instance for gpuid={}", engine_name, config.gpuid);
                 return -1;
             }
 
@@ -780,6 +784,8 @@ int main(int argc, char** argv)
             ltp.jobs_load = jobs_load;
             ltp.input_files = input_files;
             ltp.output_files = output_files;
+            ltp.logger_info = logger_info;
+            ltp.logger_error = logger_error;
 
             ncnn::Thread load_thread(load, (void*)&ltp);
 
@@ -814,6 +820,8 @@ int main(int argc, char** argv)
             // save image
             SaveThreadParams stp;
             stp.verbose = verbose;
+            stp.logger_info = logger_info;
+            stp.logger_error = logger_error;
 
             std::vector<ncnn::Thread*> save_threads(jobs_save);
             for (int i = 0; i < jobs_save; i++) {
@@ -844,7 +852,7 @@ int main(int argc, char** argv)
                 delete save_threads[i];
             }
 
-            printf("Average processing time: %.2fms/MP\n", static_cast<double>(total_elapsed) / 1000 / input_files.size());
+            logger_info->info("Average processing time: {:.2f}ms/MP", static_cast<double>(total_elapsed) / 1000 / input_files.size());
         }
 
         engines.clear();

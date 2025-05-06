@@ -16,6 +16,8 @@
 #include "layer.h"
 #include "net.h"
 
+#include "spdlog/spdlog.h"
+
 // Supported scale factors
 enum class SuperResolutionScale {
     X1 = 0,
@@ -235,6 +237,9 @@ struct SuperResolutionEngineConfig {
 
     // Engine name (optional)
     std::string engine_name;
+
+    std::shared_ptr<spdlog::logger> logger_info = spdlog::default_logger();
+    std::shared_ptr<spdlog::logger> logger_error = spdlog::default_logger();
 };
 
 // Forward declaration for is_compatible_config method
@@ -389,10 +394,10 @@ class SuperResolutionEngine {
     virtual void prepare_net_options(ncnn::Option& options) const;
     virtual int handle_alpha_channel_gpu(const ncnn::VkMat& in_alpha_tile, ncnn::VkMat& out_alpha_tile, int scale, ncnn::VkCompute& cmd, const ncnn::Option& opt) const;
 
-    static int net_load_model(ncnn::Net& net, const std::filesystem::path& path);
-    static int net_load_param(ncnn::Net& net, const std::filesystem::path& path);
+    int net_load_model(ncnn::Net& net, const std::filesystem::path& path) const;
+    int net_load_param(ncnn::Net& net, const std::filesystem::path& path) const;
 
-    static int net_load_model_and_param(ncnn::Net& net, const std::filesystem::path& path);
+    int net_load_model_and_param(ncnn::Net& net, const std::filesystem::path& path) const;
 };
 
 #endif  // SUPERRESOLUTION_BASE_HPP

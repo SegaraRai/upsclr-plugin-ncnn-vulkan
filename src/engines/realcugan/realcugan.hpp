@@ -64,7 +64,7 @@ class RealCUGAN final : public SuperResolutionEngine {
     int process_gpu_se_very_rough(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const;
 
     // Helper methods for loading models
-    static std::string get_model_path(const std::string& model_type, int scale, int noise);
+    std::string get_model_path(const std::string& model_type, int scale, int noise) const;
 };
 
 #endif  // REALCUGAN_HPP
