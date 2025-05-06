@@ -1,14 +1,28 @@
 #include <algorithm>
 #include <chrono>
 #include <clocale>
+#include <condition_variable>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 #include <iostream>
+#include <mutex>
 #include <queue>
+#include <ranges>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
+
+// ncnn
+#include "cpu.h"
+#include "gpu.h"
+#include "platform.h"
+
+#include "engines/engine_factory.hpp"
 
 namespace fs = std::filesystem;
 
@@ -89,16 +103,88 @@ static std::vector<int> parse_optarg_int_array(const char* optarg) {
 }
 #endif                   // _WIN32
 
-// ncnn
-#include "cpu.h"
-#include "gpu.h"
-#include "platform.h"
+#if _WIN32
+using path_t = std::wstring;
+#    define PATHSTR(X) L##X
+#else
+using path_t = std::string;
+#    define PATHSTR(X) X
+#endif
 
-#include "engines/engine_factory.hpp"
+namespace {
 
-#include "filesystem_utils.h"
+#if _WIN32
+std::wstring tow(std::string_view ascii_str) {
+    return std::wstring(ascii_str.begin(), ascii_str.end());
+}
+#endif
 
-static void print_usage() {
+path_t get_file_extension(const path_t& path) {
+#if _WIN32
+    return fs::path(path).extension().wstring();
+#else
+    return fs::path(path).extension().string();
+#endif
+}
+
+path_t get_file_name_without_extension(const path_t& path) {
+#if _WIN32
+    return fs::path(path).stem().wstring();
+#else
+    return fs::path(path).stem().string();
+#endif
+}
+
+bool path_is_directory(const path_t& path) {
+    return fs::is_directory(fs::path(path));
+}
+
+int list_directory(const path_t& dirpath, std::vector<path_t>& imagepaths) {
+    imagepaths.clear();
+
+    try {
+        for (const auto& entry : fs::directory_iterator(fs::path(dirpath))) {
+            if (entry.is_regular_file()) {
+                imagepaths.push_back(entry.path().filename().string<path_t::value_type, std::char_traits<path_t::value_type>, std::allocator<path_t::value_type>>());
+            }
+        }
+        std::ranges::sort(imagepaths);
+        return 0;
+    } catch (const fs::filesystem_error& e) {
+#if _WIN32
+        fwprintf(stderr, L"opendir failed %ls: %hs\n", dirpath.c_str(), e.what());
+#else
+        fprintf(stderr, "opendir failed %s: %s\n", dirpath.c_str(), e.what());
+#endif
+        return -1;
+    }
+}
+
+path_t get_executable_directory() {
+#if _WIN32
+    return fs::path(fs::current_path()).wstring();
+#else
+    return fs::path(fs::current_path()).string();
+#endif
+}
+
+bool filepath_is_readable(const path_t& path) {
+    try {
+        return fs::exists(fs::path(path)) && fs::is_regular_file(fs::path(path));
+    } catch (const fs::filesystem_error&) {
+        return false;
+    }
+}
+
+path_t sanitize_filepath(const path_t& path) {
+    if (filepath_is_readable(path)) {
+        return path;
+    }
+
+    return get_executable_directory() + path;
+}
+
+void print_usage() {
     fprintf(stderr, "Usage: realesrgan-ncnn-vulkan -i infile -o outfile [options]...\n\n");
     fprintf(stderr, "  -h                   show this help\n");
     fprintf(stderr, "  -i input-path        input image path (jpg/png/webp) or directory\n");
@@ -156,11 +242,10 @@ class Task {
 
 class TaskQueue {
    public:
-    TaskQueue() {
-    }
+    TaskQueue() = default;
 
     void put(const Task& v) {
-        lock.lock();
+        std::unique_lock lock(mutex);
 
         while (tasks.size() >= 8)  // FIXME hardcode queue length
         {
@@ -171,11 +256,11 @@ class TaskQueue {
 
         lock.unlock();
 
-        condition.signal();
+        condition.notify_one();
     }
 
     void get(Task& v) {
-        lock.lock();
+        std::unique_lock lock(mutex);
 
         while (tasks.size() == 0) {
             condition.wait(lock);
@@ -186,12 +271,12 @@ class TaskQueue {
 
         lock.unlock();
 
-        condition.signal();
+        condition.notify_one();
     }
 
    private:
-    ncnn::Mutex lock;
-    ncnn::ConditionVariable condition;
+    std::mutex mutex;
+    std::condition_variable condition;
     std::queue<Task> tasks;
 };
 
@@ -222,7 +307,7 @@ void* load(void* args) {
 
         int webp = 0;
 
-        unsigned char* pixeldata = 0;
+        unsigned char* pixeldata = nullptr;
         int w;
         int h;
         int c;
@@ -301,9 +386,8 @@ void* load(void* args) {
                 .tilesize = 200,
             };
 
-            path_t ext = get_file_extension(v.outpath);
-            if (c == 4 && (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") || ext == PATHSTR("JPEG"))) {
-                path_t output_filename2 = ltp->output_files[i] + PATHSTR(".png");
+            if (const auto ext = get_file_extension(v.outpath); c == 4 && (ext == PATHSTR(".jpg") || ext == PATHSTR(".JPG") || ext == PATHSTR(".jpeg") || ext == PATHSTR(".JPEG"))) {
+                const path_t output_filename2 = ltp->output_files[i] + PATHSTR(".png");
                 v.outpath = output_filename2;
                 ltp->logger_error->warn(PATHSTR("image {} has alpha channel! {} will output {}"), imagepath, imagepath, output_filename2);
             }
@@ -389,33 +473,34 @@ void* save(void* args) {
             }
         }
 
-        int success = 0;
-
-        path_t ext = get_file_extension(v.outpath);
+        const auto ext = get_file_extension(v.outpath);
 
         /* ----------- Create folder if not exists -------------------*/
-        fs::path fs_path = fs::absolute(v.outpath);
-        std::string parent_path = fs_path.parent_path().string();
+        const fs::path fs_path = fs::absolute(v.outpath);
+        const std::string parent_path = fs_path.parent_path().string();
         if (fs::exists(parent_path) != 1) {
             stp->logger_info->info("Create folder: [{}]", parent_path);
             fs::create_directories(parent_path);
         }
 
-        if (ext == PATHSTR("webp") || ext == PATHSTR("WEBP")) {
+        int success = 0;
+
+        if (ext == PATHSTR(".webp") || ext == PATHSTR(".WEBP")) {
             success = webp_save(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, (const unsigned char*)v.outimage.data);
-        } else if (ext == PATHSTR("png") || ext == PATHSTR("PNG")) {
+        } else if (ext == PATHSTR(".png") || ext == PATHSTR(".PNG")) {
 #if _WIN32
             success = wic_encode_image(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data);
 #else
             success = stbi_write_png(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data, 0);
 #endif
-        } else if (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") || ext == PATHSTR("JPEG")) {
+        } else if (ext == PATHSTR(".jpg") || ext == PATHSTR(".JPG") || ext == PATHSTR(".jpeg") || ext == PATHSTR(".JPEG")) {
 #if _WIN32
             success = wic_encode_jpeg_image(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data);
 #else
             success = stbi_write_jpg(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data, 100);
 #endif
         }
+
         if (success) {
             if (verbose) {
                 stp->logger_info->info(PATHSTR("{} -> {} done, took {}us"), v.inpath, v.outpath, v.elapsed.count());
@@ -428,11 +513,6 @@ void* save(void* args) {
     return 0;
 }
 
-namespace {
-std::wstring tow(const std::string& ascii_str) {
-    std::wstring wstr(ascii_str.begin(), ascii_str.end());
-    return wstr;
-}
 }  // namespace
 
 #if _WIN32
@@ -579,44 +659,75 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    if (tilesize.size() != (gpuid.empty() ? 1 : gpuid.size()) && !tilesize.empty()) {
-        logger_error->error("Invalid tilesize argument");
+    if (gpuid.empty()) {
+        if (verbose) {
+            logger_info->info("No GPU specified, using default GPU device {}", ncnn::get_default_gpu_index());
+        }
+        gpuid.push_back(ncnn::get_default_gpu_index());
+    }
+
+    if (tilesize.empty()) {
+        if (verbose) {
+            logger_info->info("No tilesize specified, using default tilesize 0");
+        }
+        tilesize.push_back(0);
+    }
+
+    if (jobs_proc.empty()) {
+        if (verbose) {
+            logger_info->info("No jobs_proc specified, using default jobs_proc 2");
+        }
+        jobs_proc.push_back(2);
+    }
+
+    if (scale < 2 || scale > 4) {
+        logger_error->error("Invalid scale");
         return -1;
     }
 
-    for (int i = 0; i < (int)tilesize.size(); i++) {
-        if (tilesize[i] != 0 && tilesize[i] < 32) {
-            logger_error->error("Invalid tilesize argument");
+    if (tilesize.size() != 1 && tilesize.size() != gpuid.size()) {
+        logger_error->error("Invalid tilesize: expected 1 or {} tilesize, got {}", gpuid.size(), tilesize.size());
+        return -1;
+    }
+
+    for (const auto tile : tilesize) {
+        if (tile != 0 && tile < 32) {
+            logger_error->error("Invalid tilesize: expected >=32 or 0, got {}", tile);
             return -1;
         }
     }
 
-    if (jobs_load < 1 || jobs_save < 1) {
-        logger_error->error("Invalid thread count argument");
+    if (noise < -1 || noise > 3) {
+        logger_error->error("Invalid noise: expected -1/0/1/2/3, got {}", noise);
         return -1;
     }
 
-    if (jobs_proc.size() != (gpuid.empty() ? 1 : gpuid.size()) && !jobs_proc.empty()) {
-        logger_error->error("Invalid jobs_proc thread count argument");
+    if (syncgap < 0 || syncgap > 3) {
+        logger_error->error("Invalid syncgap: expected 0/1/2/3, got {}", syncgap);
         return -1;
     }
 
-    for (int i = 0; i < (int)jobs_proc.size(); i++) {
-        if (jobs_proc[i] < 1) {
-            logger_error->error("Invalid jobs_proc thread count argument");
+    if (jobs_proc.size() != 1 && jobs_proc.size() != gpuid.size()) {
+        logger_error->error("Invalid jobs_proc: expected 1 or {} jobs_proc, got {}", gpuid.size(), jobs_proc.size());
+        return -1;
+    }
+
+    for (const auto count : jobs_proc) {
+        if (count < 1) {
+            logger_error->error("Invalid jobs_proc: expected >=1, got {}", count);
             return -1;
         }
     }
 
     if (!path_is_directory(outputpath)) {
         // guess format from outputpath no matter what format argument specified
-        path_t ext = get_file_extension(outputpath);
+        const auto ext = get_file_extension(outputpath);
 
-        if (ext == PATHSTR("png") || ext == PATHSTR("PNG")) {
+        if (ext == PATHSTR(".png") || ext == PATHSTR(".PNG")) {
             format = PATHSTR("png");
-        } else if (ext == PATHSTR("webp") || ext == PATHSTR("WEBP")) {
+        } else if (ext == PATHSTR(".webp") || ext == PATHSTR(".WEBP")) {
             format = PATHSTR("webp");
-        } else if (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") || ext == PATHSTR("JPEG")) {
+        } else if (ext == PATHSTR(".jpg") || ext == PATHSTR(".JPG") || ext == PATHSTR(".jpeg") || ext == PATHSTR(".JPEG")) {
             format = PATHSTR("jpg");
         } else {
             logger_error->error(PATHSTR("Invalid output path extension: '{}'"), ext);
@@ -648,11 +759,11 @@ int main(int argc, char** argv)
             for (int i = 0; i < count; i++) {
                 path_t filename = filenames[i];
                 path_t filename_noext = get_file_name_without_extension(filename);
-                path_t output_filename = filename_noext + PATHSTR('.') + format;
+                path_t output_filename = filename_noext + PATHSTR(".") + format;
 
                 // filename list is sorted, check if output image path conflicts
                 if (filename_noext == last_filename_noext) {
-                    path_t output_filename2 = filename + PATHSTR('.') + format;
+                    path_t output_filename2 = filename + PATHSTR(".") + format;
                     logger_error->warn(PATHSTR("Image {} has same name with {}! {} will output {}"), filename, last_filename, filename, output_filename2);
                     output_filename = output_filename2;
                 } else {
@@ -672,27 +783,21 @@ int main(int argc, char** argv)
         }
     }
 
-    // Check if the engine exists
-    auto engines = SuperResolutionEngineFactory::get_available_engines();
-    bool engine_found = false;
-    for (const auto& e : engines) {
-        if (e == engine_name) {
-            engine_found = true;
-            break;
-        }
-    }
-
-    if (!engine_found) {
+    const auto* engine_info = SuperResolutionEngineFactory::get_engine_info(engine_name);
+    if (!engine_info) {
         logger_error->error("Unknown engine: '{}'", engine_name);
         return -1;
     }
 
-    // Get engine info
-    const auto* engine_info = SuperResolutionEngineFactory::get_engine_info(engine_name);
-
-    // Set default model name if not specified
     if (modelname.empty()) {
         modelname = engine_info->default_model;
+    }
+
+    if (!std::ranges::any_of(engine_info->model_names, [&modelname](const auto& name) {
+            return name == modelname;
+        })) {
+        logger_error->error("Unknown model: '{}'", modelname);
+        return -1;
     }
 
 #if _WIN32
@@ -701,26 +806,22 @@ int main(int argc, char** argv)
 
     ncnn::create_gpu_instance();
 
-    if (gpuid.empty()) {
-        gpuid.push_back(ncnn::get_default_gpu_index());
+    const auto use_gpu_count = gpuid.size();
+
+    if (jobs_proc.size() != use_gpu_count) {
+        jobs_proc.resize(use_gpu_count, jobs_proc[0]);
     }
 
-    const int use_gpu_count = (int)gpuid.size();
-
-    if (jobs_proc.empty()) {
-        jobs_proc.resize(use_gpu_count, 2);
+    if (tilesize.size() != use_gpu_count) {
+        tilesize.resize(use_gpu_count, tilesize[0]);
     }
 
-    if (tilesize.empty()) {
-        tilesize.resize(use_gpu_count, 0);
-    }
-
-    int cpu_count = std::max(1, ncnn::get_cpu_count());
+    const int cpu_count = std::max(1, ncnn::get_cpu_count());
     jobs_load = std::min(jobs_load, cpu_count);
     jobs_save = std::min(jobs_save, cpu_count);
 
     int gpu_count = ncnn::get_gpu_count();
-    for (int i = 0; i < use_gpu_count; i++) {
+    for (std::size_t i = 0; i < use_gpu_count; i++) {
         if (gpuid[i] < 0 || gpuid[i] >= gpu_count) {
             logger_error->error("Invalid gpu device: {} (expected: 0-{})", gpuid[i], gpu_count - 1);
 
@@ -730,8 +831,8 @@ int main(int argc, char** argv)
     }
 
     int total_jobs_proc = 0;
-    for (int i = 0; i < use_gpu_count; i++) {
-        int gpu_queue_count = ncnn::get_gpu_info(gpuid[i]).compute_queue_count();
+    for (std::size_t i = 0; i < use_gpu_count; i++) {
+        const int gpu_queue_count = ncnn::get_gpu_info(gpuid[i]).compute_queue_count();
         jobs_proc[i] = std::min(jobs_proc[i], gpu_queue_count);
         total_jobs_proc += jobs_proc[i];
     }
@@ -739,9 +840,9 @@ int main(int argc, char** argv)
     {
         std::vector<std::unique_ptr<SuperResolutionEngine>> engines;
 
-        for (int i = 0; i < use_gpu_count; i++) {
+        for (std::size_t i = 0; i < use_gpu_count; i++) {
             SuperResolutionEngineConfig config{
-                .model_dir = std::filesystem::path(model),
+                .model_dir = fs::path(model),
                 .model = modelname,
 
                 .gpuid = gpuid[i],
@@ -791,7 +892,7 @@ int main(int argc, char** argv)
 
             // engine proc
             std::vector<ProcThreadParams> ptp(use_gpu_count);
-            for (int i = 0; i < use_gpu_count; i++) {
+            for (std::size_t i = 0; i < use_gpu_count; i++) {
                 ptp[i].engine = engines[i].get();
                 ptp[i].default_config = engines[i]->create_default_process_config();
                 ptp[i].total_elapsed = &total_elapsed;
@@ -810,7 +911,7 @@ int main(int argc, char** argv)
             std::vector<ncnn::Thread*> proc_threads(total_jobs_proc);
             {
                 int total_jobs_proc_id = 0;
-                for (int i = 0; i < use_gpu_count; i++) {
+                for (std::size_t i = 0; i < use_gpu_count; i++) {
                     for (int j = 0; j < jobs_proc[i]; j++) {
                         proc_threads[total_jobs_proc_id++] = new ncnn::Thread(proc, (void*)&ptp[i]);
                     }
@@ -852,7 +953,7 @@ int main(int argc, char** argv)
                 delete save_threads[i];
             }
 
-            logger_info->info("Average processing time: {:.2f}ms/MP", static_cast<double>(total_elapsed) / 1000 / input_files.size());
+            logger_info->info(std::format("Average processing time: {:.2f}ms/MP", static_cast<double>(total_elapsed) / 1000 / input_files.size()));
         }
 
         engines.clear();
