@@ -1,6 +1,6 @@
 // Super-resolution base class for ncnn implementation
-#ifndef SUPERRESOLUTION_BASE_HPP
-#define SUPERRESOLUTION_BASE_HPP
+#ifndef SUPER_RESOLUTION_BASE_HPP
+#define SUPER_RESOLUTION_BASE_HPP
 
 #include <bitset>
 #include <concepts>
@@ -400,4 +400,4 @@ class SuperResolutionEngine {
     int net_load_model_and_param(ncnn::Net& net, const std::filesystem::path& path) const;
 };
 
-#endif  // SUPERRESOLUTION_BASE_HPP
+#endif  // SUPER_RESOLUTION_BASE_HPP

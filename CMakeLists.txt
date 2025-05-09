@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>")
+
 project(realesrgan-ncnn-vulkan CXX)
 
 option(USE_STATIC_MOLTENVK "link moltenvk static library" OFF)
@@ -103,18 +106,16 @@ compile_shader(realesrgan_postproc_tta.comp.glsl)
 add_custom_target(generate-spirv DEPENDS ${SHADER_SPV_HEX_FILES})
 
 # Add the library target for the plugin
-add_library(upsclr-ncnn-vulkan-lib SHARED
+add_library(upsclr-plugin-ncnn-vulkan SHARED
     src/engines/base.cpp
     src/engines/engine_factory.cpp
     src/engines/realesrgan/realesrgan.cpp
     src/engines/realcugan/realcugan.cpp
-    #src/upscaler_plugin_api.cpp
-    #src/upscaler_registry.cpp
-    #src/realesrgan_upscaler.cpp
+    src/plugin/upsclr_plugin.cpp
 )
 
 # Set export macro for the library
-target_compile_definitions(upsclr-ncnn-vulkan-lib PRIVATE UPSCALER_EXPORTS)
+target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE UPSCLR_EXPORTS)
 
 # Add the executable target
 add_executable(upsclr-ncnn-vulkan
@@ -126,22 +127,19 @@ add_executable(upsclr-ncnn-vulkan
 )
 
 if(WIN32)
-    target_compile_definitions(upsclr-ncnn-vulkan-lib PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
+    target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
     target_compile_definitions(upsclr-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
-
-    target_compile_options(upsclr-ncnn-vulkan-lib PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
-    target_compile_options(upsclr-ncnn-vulkan PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
     target_sources(upsclr-ncnn-vulkan PRIVATE src/win_utf8.cpp)
 endif()
 
 find_package(Vulkan REQUIRED)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE Vulkan::Vulkan)
-target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE Vulkan::Vulkan)
+target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE Vulkan::Vulkan)
 
 find_package(ncnn CONFIG REQUIRED)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE ncnn)
-target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE ncnn)
+target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE ncnn)
 
 find_package(Stb REQUIRED)
 target_include_directories(upsclr-ncnn-vulkan PRIVATE ${Stb_INCLUDE_DIR})
@@ -151,10 +149,10 @@ target_link_libraries(upsclr-ncnn-vulkan PRIVATE WebP::webp WebP::webpdecoder We
 
 find_package(spdlog CONFIG REQUIRED)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
-target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE spdlog::spdlog_header_only)
+target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
 
 add_dependencies(upsclr-ncnn-vulkan generate-spirv)
-add_dependencies(upsclr-ncnn-vulkan-lib generate-spirv)
+add_dependencies(upsclr-plugin-ncnn-vulkan generate-spirv)
 
 if(USE_STATIC_MOLTENVK)
     find_library(CoreFoundation NAMES CoreFoundation)
@@ -166,7 +164,7 @@ if(USE_STATIC_MOLTENVK)
     find_library(IOKit NAMES IOKit)
     find_library(IOSurface NAMES IOSurface)
 
-    target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE
+    target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE
         ${Metal}
         ${QuartzCore}
         ${CoreGraphics}
@@ -191,12 +189,12 @@ endif()
 
 if(OPENMP_FOUND)
     target_link_libraries(upsclr-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
-    target_link_libraries(upsclr-ncnn-vulkan-lib PRIVATE OpenMP::OpenMP_CXX)
+    target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
 
 # Install the library
-install(TARGETS upsclr-ncnn-vulkan-lib
+install(TARGETS upsclr-plugin-ncnn-vulkan
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
@@ -204,8 +202,8 @@ install(TARGETS upsclr-ncnn-vulkan-lib
 
 # Install the headers
 install(FILES
-    src/upscaler_plugin_api.h
-    DESTINATION include/upsclr-ncnn-vulkan-lib
+    src/plugin/upsclr_plugin.h
+    DESTINATION include/upsclr-plugin-ncnn-vulkan
 )
 
 # Add examples directory
