@@ -10,19 +10,25 @@ class RealESRGAN final : public SuperResolutionEngine {
     // Engine information
     static const SuperResolutionEngineInfo& get_engine_info() {
         static const SuperResolutionEngineInfo info{
-            .engine_name = "realesrgan",
+            .engine_name = u8"realesrgan",
             .supported_features = FeatureFlags(
                 SuperResolutionFeatureFlags::TTA_MODE,
                 SuperResolutionFeatureFlags::ALPHA,
-                SuperResolutionFeatureFlags::TILESIZE),
+                SuperResolutionFeatureFlags::TILE_SIZE),
             .supported_scales = ScaleFlags(
                 SuperResolutionScale::X2,
                 SuperResolutionScale::X3,
                 SuperResolutionScale::X4),
-            .model_names = {"realesrgan-x4plus", "realesrnet-x4plus", "realesrgan-x4plus-anime", "realesr-animevideov3"},
-            .default_model = "realesrgan-x4plus",
-            .description = "Enhanced ESRGAN implementation with pure-CNN architecture",
-            .version = "1.0.0"};
+            .model_names = {
+                u8"realesrgan-x4plus",
+                u8"realesrnet-x4plus",
+                u8"realesrgan-x4plus-anime",
+                u8"realesr-animevideov3",
+            },
+            .default_model = u8"realesrgan-x4plus",
+            .description = u8"Enhanced ESRGAN implementation with pure-CNN architecture",
+            .version = u8"1.0.0",
+        };
         return info;
     }
 
@@ -32,7 +38,7 @@ class RealESRGAN final : public SuperResolutionEngine {
 
     const SuperResolutionEngineInfo& engine_info() const override;
 
-    ProcessConfig create_default_process_config() const override;
+    int get_default_tile_size() const override;
 
    protected:
     void prepare_net_options(ncnn::Option& options) const override;

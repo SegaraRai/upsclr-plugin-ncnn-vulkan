@@ -29,13 +29,13 @@ enum class SuperResolutionScale {
 
 // Engine feature flags
 enum class SuperResolutionFeatureFlags {
-    TTA_MODE = 0,  // TTA mode support
-    NOISE = 1,     // Noise reduction support
-    SYNCGAP = 2,   // SyncGAP support
-    CPU = 3,       // CPU processing support
-    ALPHA = 4,     // Alpha channel processing support
-    TILESIZE = 5,  // Tile size adjustment support
-    COUNT = 6      // Total number of features
+    TTA_MODE = 0,   // TTA mode support
+    NOISE = 1,      // Noise reduction support
+    SYNC_GAP = 2,   // SyncGAP support
+    CPU = 3,        // CPU processing support
+    ALPHA = 4,      // Alpha channel processing support
+    TILE_SIZE = 5,  // Tile size adjustment support
+    COUNT = 6       // Total number of features
 };
 
 // Type-safe bitset for feature flags
@@ -181,14 +181,14 @@ inline SuperResolutionScale int_to_scale(int scale) {
 
 // Engine information structure
 struct SuperResolutionEngineInfo {
-    std::string engine_name;               // Engine name
-    FeatureFlags supported_features;       // Supported feature flags
-    ScaleFlags supported_scales;           // Supported scale factors (bit flags)
-    std::vector<std::string> model_names;  // Supported model names
-    std::string default_model;             // Default model name
-    int default_noise = -1;                // Default noise level
-    std::string description;               // Engine description
-    std::string version;                   // Engine version
+    std::u8string engine_name;               // Engine name
+    FeatureFlags supported_features;         // Supported feature flags
+    ScaleFlags supported_scales;             // Supported scale factors (bit flags)
+    std::vector<std::u8string> model_names;  // Supported model names
+    std::u8string default_model;             // Default model name
+    int default_noise = -1;                  // Default noise level
+    std::u8string description;               // Engine description
+    std::u8string version;                   // Engine version
 
     // Helper method to check if a feature is supported
     bool supports(SuperResolutionFeatureFlags feature) const {
@@ -210,7 +210,7 @@ struct SuperResolutionEngineInfo {
     }
 
     // Helper method to check if a model is supported
-    bool supports_model(const std::string& model) const {
+    bool supports_model(const std::u8string& model) const {
         return std::find(model_names.begin(), model_names.end(), model) != model_names.end();
     }
 
@@ -226,19 +226,18 @@ enum class ColorFormat {
 // Configuration for engine initialization
 struct SuperResolutionEngineConfig {
     std::filesystem::path model_dir;  // Base path for model files
-    std::string model;                // All engines
+    std::u8string model;              // All engines
 
-    int gpuid = 0;          // All engines. -1 for CPU (RealCUGAN, RealSR, Waifu2x)
+    int gpu_id = 0;         // All engines. -1 for CPU (RealCUGAN, RealSR, Waifu2x)
     bool tta_mode = false;  // All engines
     int num_threads = 1;    // RealCUGAN, RealSR, Waifu2x
 
-    int noise = -1;   // RealCUGAN, SRMD, Waifu2x (-1, 0, 1, 2, 3). Noise level should be set during initialization as it controls model loading.
-    int syncgap = 0;  // RealCUGAN only (0, 1, 2, 3)
+    int noise = -1;    // RealCUGAN, SRMD, Waifu2x (-1, 0, 1, 2, 3). Noise level should be set during initialization as it controls model loading.
+    int sync_gap = 0;  // RealCUGAN only (0, 1, 2, 3)
 
     // Engine name (optional)
-    std::string engine_name;
+    std::u8string engine_name;
 
-    std::shared_ptr<spdlog::logger> logger_info = spdlog::default_logger();
     std::shared_ptr<spdlog::logger> logger_error = spdlog::default_logger();
 };
 
@@ -260,12 +259,12 @@ inline bool SuperResolutionEngineInfo::is_compatible_config(const SuperResolutio
     }
 
     // Check SyncGAP
-    if (config.syncgap > 0 && !supports(SuperResolutionFeatureFlags::SYNCGAP)) {
+    if (config.sync_gap > 0 && !supports(SuperResolutionFeatureFlags::SYNC_GAP)) {
         return false;
     }
 
     // Check CPU mode
-    if (config.gpuid < 0 && !supports(SuperResolutionFeatureFlags::CPU)) {
+    if (config.gpu_id < 0 && !supports(SuperResolutionFeatureFlags::CPU)) {
         return false;
     }
 
@@ -279,7 +278,7 @@ struct ProcessConfig {
     ColorFormat input_format = ColorFormat::RGB;   // All engines
     ColorFormat output_format = ColorFormat::RGB;  // All engines
 
-    int tilesize = 400;  // All engines
+    int tile_size = 0;  // All engines
 };
 
 // Bicubic layers management
@@ -363,7 +362,7 @@ class SuperResolutionEngine {
     // Image processing
     virtual int process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const;
 
-    virtual ProcessConfig create_default_process_config() const;
+    virtual int get_default_tile_size() const = 0;
 
    protected:
     // Configuration

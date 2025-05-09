@@ -13,22 +13,27 @@ class RealCUGAN final : public SuperResolutionEngine {
     // Engine information
     static const SuperResolutionEngineInfo& get_engine_info() {
         static const SuperResolutionEngineInfo info{
-            .engine_name = "realcugan",
+            .engine_name = u8"realcugan",
             .supported_features = FeatureFlags(
                 SuperResolutionFeatureFlags::TTA_MODE,
                 SuperResolutionFeatureFlags::NOISE,
-                SuperResolutionFeatureFlags::SYNCGAP,
+                SuperResolutionFeatureFlags::SYNC_GAP,
                 SuperResolutionFeatureFlags::ALPHA,
-                SuperResolutionFeatureFlags::TILESIZE),
+                SuperResolutionFeatureFlags::TILE_SIZE),
             .supported_scales = ScaleFlags(
                 SuperResolutionScale::X2,
                 SuperResolutionScale::X3,
                 SuperResolutionScale::X4),
-            .model_names = {"models-se", "models-nose", "models-pro"},
-            .default_model = "models-se",
+            .model_names = {
+                u8"models-se",
+                u8"models-nose",
+                u8"models-pro",
+            },
+            .default_model = u8"models-se",
             .default_noise = 0,
-            .description = "Real-CUGAN: Real-world Cartoon Image Super-Resolution",
-            .version = "1.0.0"};
+            .description = u8"Real-CUGAN: Real-world Cartoon Image Super-Resolution",
+            .version = u8"1.0.0",
+        };
         return info;
     }
 
@@ -38,7 +43,7 @@ class RealCUGAN final : public SuperResolutionEngine {
 
     const SuperResolutionEngineInfo& engine_info() const override;
 
-    ProcessConfig create_default_process_config() const override;
+    int get_default_tile_size() const override;
 
    protected:
     void prepare_net_options(ncnn::Option& options) const override;
@@ -64,7 +69,7 @@ class RealCUGAN final : public SuperResolutionEngine {
     int process_gpu_se_very_rough(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const;
 
     // Helper methods for loading models
-    std::string get_model_path(const std::string& model_type, int scale, int noise) const;
+    std::u8string get_model_path(const std::u8string& model_type, int scale, int noise) const;
 };
 
 #endif  // REALCUGAN_HPP

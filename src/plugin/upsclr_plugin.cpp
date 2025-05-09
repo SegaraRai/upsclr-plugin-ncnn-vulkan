@@ -6,6 +6,7 @@
 #include "upsclr_plugin.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -14,12 +15,16 @@
 #include <unordered_set>
 #include <vector>
 
-// Include glaze for JSON parsing
-#include <glaze/glaze.hpp>
+// glaze
+#include "glaze/glaze.hpp"
 
 // ncnn
 #include "cpu.h"
 #include "gpu.h"
+
+// spdlog
+#include "spdlog/sinks/stdout_color_sinks.h"
+#include "spdlog/spdlog.h"
 
 #if _WIN32
 #    include <Windows.h>
@@ -27,33 +32,50 @@
 
 // Include engine headers
 #include "../engines/base.hpp"
+#include "../engines/encoding_utils.hpp"
 #include "../engines/engine_factory.hpp"
+
+template <>
+struct glz::meta<std::u8string>
+{
+   static constexpr auto read_x = [](std::u8string& s, const std::string& input) { s = as_utf8(input); };
+   static constexpr auto write_x = [](const std::u8string& s) -> std::string { return as_string(s); };
+   static constexpr auto value = glz::custom<read_x, write_x>;
+};
+
+struct EngineConfigEx : public SuperResolutionEngineConfig {
+    int tile_size = 0;
+};
 
 // Define the UpsclrEngineInstance struct
 struct UpsclrEngineInstance final {
     std::mutex mutex;
     std::unique_ptr<SuperResolutionEngine> engine;
-    ProcessConfig process_config;
+    EngineConfigEx engine_config;
 };
 
 namespace {
 // Global storage for dynamically allocated objects
 
+char8_t* u8dup(const char8_t* str) {
+    return reinterpret_cast<char8_t*>(strdup(reinterpret_cast<const char*>(str)));
+}
+
 struct UpsclrEngineInfoRAII final {
     UpsclrEngineInfo info;
 
-    UpsclrEngineInfoRAII(const char* name, const char* description, const char* version, const char* config_json_schema) {
-        info.name = strdup(name);
-        info.description = strdup(description);
-        info.version = strdup(version);
-        info.config_json_schema = strdup(config_json_schema);
+    UpsclrEngineInfoRAII(const char8_t* name, const char8_t* description, const char8_t* version, const char8_t* config_json_schema) {
+        info.name = u8dup(name);
+        info.description = u8dup(description);
+        info.version = u8dup(version);
+        info.config_json_schema = u8dup(config_json_schema);
     }
 
     ~UpsclrEngineInfoRAII() {
-        free(const_cast<char*>(info.name));
-        free(const_cast<char*>(info.description));
-        free(const_cast<char*>(info.version));
-        free(const_cast<char*>(info.config_json_schema));
+        free(const_cast<char8_t*>(info.name));
+        free(const_cast<char8_t*>(info.description));
+        free(const_cast<char8_t*>(info.version));
+        free(const_cast<char8_t*>(info.config_json_schema));
     }
 
     UpsclrEngineInfoRAII(const UpsclrEngineInfoRAII&) = delete;
@@ -90,9 +112,9 @@ std::unordered_map<UpsclrEngineInstance*, std::unique_ptr<UpsclrEngineInstance>>
 
 // Plugin information
 const UpsclrPluginInfo g_plugin_info = {
-    .name = "upsclr-ncnn-vulkan-plugin",
-    .version = "1.0.0",
-    .description = "Image upscaling plugin using CNN-based super-resolution engines backed by ncnn and Vulkan",
+    .name = u8"upsclr-ncnn-vulkan-plugin",
+    .version = u8"1.0.0",
+    .description = u8"Image upscaling plugin using CNN-based super-resolution engines backed by ncnn and Vulkan",
 };
 
 // Cache for engine info structures
@@ -117,67 +139,65 @@ ColorFormat convert_color_format(UpsclrColorFormat format) {
 // Base class for engine adapters
 class EngineAdapter {
    protected:
-    static void push_glaze_errors(std::vector<std::string>& errors, const glz::error_ctx& error_ctx) {
-        if (!error_ctx.includer_error.empty()) {
-            errors.push_back(std::string(error_ctx.includer_error));
-        }
+    static void push_glaze_errors(std::vector<std::u8string>& errors, const glz::error_ctx& error_ctx, std::string_view json_sv) {
+        errors.push_back(ascii_to_utf8(glz::format_error(error_ctx, json_sv)));
         if (!error_ctx.custom_error_message.empty()) {
-            errors.push_back(std::string(error_ctx.custom_error_message));
+            errors.push_back(ascii_to_utf8(error_ctx.custom_error_message));
         }
     }
 
-    void push_common_engine_config_errors(std::vector<std::string>& errors, const SuperResolutionEngineConfig& config) const {
+    void push_common_engine_config_errors(std::vector<std::u8string>& errors, const EngineConfigEx& config) const {
         if (this->engine_info == nullptr) {
             return;
         }
 
         if (!this->engine_info->supports_model(config.model)) {
-            errors.push_back("Unsupported model: " + config.model);
+            errors.push_back(u8"Unsupported model: " + config.model);
         }
 
         if (config.tta_mode && !this->engine_info->supports(SuperResolutionFeatureFlags::TTA_MODE)) {
-            errors.push_back("TTA mode not supported by this engine");
+            errors.push_back(u8"TTA mode not supported by this engine");
         }
 
         if (config.noise >= 0 && !this->engine_info->supports(SuperResolutionFeatureFlags::NOISE)) {
-            errors.push_back("Noise reduction not supported by this engine");
+            errors.push_back(u8"Noise reduction not supported by this engine");
         }
 
-        if (config.syncgap > 0 && !this->engine_info->supports(SuperResolutionFeatureFlags::SYNCGAP)) {
-            errors.push_back("SyncGAP not supported by this engine");
+        if (config.sync_gap > 0 && !this->engine_info->supports(SuperResolutionFeatureFlags::SYNC_GAP)) {
+            errors.push_back(u8"SyncGAP not supported by this engine");
         }
 
-        if (config.gpuid < 0 && !this->engine_info->supports(SuperResolutionFeatureFlags::CPU)) {
-            errors.push_back("CPU processing not supported by this engine");
+        if (config.gpu_id < 0 && !this->engine_info->supports(SuperResolutionFeatureFlags::CPU)) {
+            errors.push_back(u8"CPU processing not supported by this engine");
         }
     }
 
    public:
-    const char* engine_name;
+    const char8_t* engine_name;
     const SuperResolutionEngineInfo* engine_info;
 
     EngineAdapter() = delete;
-    EngineAdapter(const char* engine_name) : engine_name(engine_name), engine_info(SuperResolutionEngineFactory::get_engine_info(engine_name)) {}
+    EngineAdapter(const char8_t* engine_name) : engine_name(engine_name), engine_info(SuperResolutionEngineFactory::get_engine_info(engine_name)) {}
 
     virtual ~EngineAdapter() = default;
 
     // Get engine description
-    virtual std::string get_engine_description() const = 0;
+    virtual std::u8string get_engine_description() const = 0;
 
     // Get engine version
-    virtual std::string get_engine_version() const = 0;
+    virtual std::u8string get_engine_version() const = 0;
 
     // Get JSON schema for engine configuration
-    virtual std::string get_json_schema() const = 0;
+    virtual std::u8string get_json_schema() const = 0;
 
     // Parse JSON configuration
-    virtual std::optional<SuperResolutionEngineConfig> parse_config(const char* config_json, size_t config_json_length, std::vector<std::string>& errors) const = 0;
+    virtual std::optional<EngineConfigEx> parse_config(const char8_t* config_json, size_t config_json_length, std::vector<std::u8string>& errors) const = 0;
 
     // Validate engine configuration
-    virtual void validate_config_extra(const SuperResolutionEngineConfig& engine_config, std::vector<std::string>& errors, std::vector<std::string>& warnings) const {}
+    virtual void validate_config_extra(const EngineConfigEx& engine_config, std::vector<std::u8string>& errors, std::vector<std::u8string>& warnings) const {}
 
     // Validate JSON configuration
-    virtual void validate_config(const char* config_json, size_t config_json_length, std::vector<std::string>& errors, std::vector<std::string>& warnings) const {
+    virtual void validate_config(const char8_t* config_json, size_t config_json_length, std::vector<std::u8string>& errors, std::vector<std::u8string>& warnings) const {
         const auto parsed = parse_config(config_json, config_json_length, errors);
         if (!parsed.has_value()) {
             return;
@@ -190,16 +210,11 @@ class EngineAdapter {
     }
 
     // Create engine instance
-    virtual std::unique_ptr<SuperResolutionEngine> create_engine(const char* config_json, size_t config_json_length, std::vector<std::string>& errors) const {
-        const auto engine_config = parse_config(config_json, config_json_length, errors);
-        if (!engine_config.has_value()) {
-            return nullptr;
-        }
-
+    virtual std::unique_ptr<SuperResolutionEngine> create_engine(const EngineConfigEx& engine_config, std::vector<std::u8string>& errors) const {
         try {
-            return SuperResolutionEngineFactory::create_engine(this->engine_name, engine_config.value());
+            return SuperResolutionEngineFactory::create_engine(this->engine_name, engine_config);
         } catch (const std::exception& e) {
-            errors.push_back(std::format("Failed to create engine: {}", e.what()));
+            errors.push_back(ascii_to_utf8(std::format("Failed to create engine: {}", e.what())));
             return nullptr;
         }
     }
@@ -209,19 +224,28 @@ class EngineAdapter {
 class RealESRGANAdapter final : public EngineAdapter {
    public:
     struct Config {
-        int gpuid = ncnn::get_default_gpu_index();
+        std::u8string model_dir = u8"";
+        int gpu_id = ncnn::get_default_gpu_index();
         int num_threads = ncnn::get_cpu_count();
+        int tile_size = 0;
         bool tta_mode = false;
-        std::string model = "realesrgan-x4plus";
+        std::u8string model = u8"realesrgan-x4plus";
 
         struct glaze_json_schema {
-            glz::schema gpuid{
+            glz::schema model_dir{
+                .description = "Path to the model directory",
+            };
+            glz::schema gpu_id{
                 .description = "GPU device ID",
                 .minimum = 0,
             };
             glz::schema num_threads{
                 .description = "Number of CPU threads when using CPU processing (No effect for now)",
                 .minimum = 1,
+            };
+            glz::schema tile_size{
+                .description = "Tile size for processing (0 = auto)",
+                .minimum = 0,
             };
             glz::schema tta_mode{
                 .description = "Enable TTA mode for better quality but slower processing",
@@ -238,42 +262,44 @@ class RealESRGANAdapter final : public EngineAdapter {
         };
     };
 
-    RealESRGANAdapter() : EngineAdapter("realesrgan") {}
+    RealESRGANAdapter() : EngineAdapter(u8"realesrgan") {}
 
-    std::string get_engine_description() const override {
-        return this->engine_info ? this->engine_info->description : "Real-ESRGAN super-resolution engine";
+    std::u8string get_engine_description() const override {
+        return this->engine_info ? this->engine_info->description : u8"Real-ESRGAN super-resolution engine";
     }
 
-    std::string get_engine_version() const override {
-        return this->engine_info ? this->engine_info->version : "1.0.0";
+    std::u8string get_engine_version() const override {
+        return this->engine_info ? this->engine_info->version : u8"1.0.0";
     }
 
-    std::string get_json_schema() const override {
-        return glz::write_json_schema<Config>().value_or("");
+    std::u8string get_json_schema() const override {
+        return as_utf8(glz::write_json_schema<Config>().value_or(""));
     }
 
-    std::optional<SuperResolutionEngineConfig> parse_config(const char* config_json, size_t config_json_length, std::vector<std::string>& errors) const override {
-        if (!config_json || config_json_length == 0) {
-            errors.push_back("Empty configuration");
+    std::optional<EngineConfigEx> parse_config(const char8_t* config_json, size_t config_json_length, std::vector<std::u8string>& errors) const override {
+        if (config_json == nullptr || config_json_length == 0) {
+            errors.push_back(u8"Empty configuration");
             return std::nullopt;
         }
 
-        std::string json_str(config_json, config_json_length);
-        auto result = glz::read_json<Config>(json_str);
+        const std::string_view json_sv(reinterpret_cast<const char*>(config_json), config_json_length);
 
-        if (!result.has_value()) {
-            EngineAdapter::push_glaze_errors(errors, result.error());
+        Config config;
+        auto error_ctx = glz::read<glz::opts{.null_terminated = false, .error_on_unknown_keys = false}>(config, json_sv);
+        if (error_ctx) {
+            EngineAdapter::push_glaze_errors(errors, error_ctx, json_sv);
             return std::nullopt;
         }
 
-        const auto& config = result.value();
-
-        SuperResolutionEngineConfig engine_config;
+        EngineConfigEx engine_config;
         engine_config.engine_name = this->engine_name;
-        engine_config.gpuid = config.gpuid;
+        engine_config.gpu_id = config.gpu_id;
         engine_config.tta_mode = config.tta_mode;
         engine_config.num_threads = config.num_threads;
         engine_config.model = config.model;
+        engine_config.model_dir = std::filesystem::u8path(config.model_dir);
+
+        engine_config.tile_size = config.tile_size;
 
         return engine_config;
     }
@@ -283,21 +309,30 @@ class RealESRGANAdapter final : public EngineAdapter {
 class RealCUGANAdapter final : public EngineAdapter {
    public:
     struct Config {
-        int gpuid = ncnn::get_default_gpu_index();
+        std::u8string model_dir = u8"";
+        int gpu_id = ncnn::get_default_gpu_index();
         int num_threads = ncnn::get_cpu_count();
+        int tile_size = 0;
         bool tta_mode = false;
-        std::string model = "models-se";
+        std::u8string model = u8"models-se";
         int noise = -1;
-        int syncgap = 0;
+        int sync_gap = 0;
 
         struct glaze_json_schema {
-            glz::schema gpuid{
+            glz::schema model_dir{
+                .description = "Path to the model directory",
+            };
+            glz::schema gpu_id{
                 .description = "GPU device ID",
                 .minimum = 0,
             };
             glz::schema num_threads{
                 .description = "Number of CPU threads when using CPU processing (No effect for now)",
                 .minimum = 1,
+            };
+            glz::schema tile_size{
+                .description = "Tile size for processing (0 = auto)",
+                .minimum = 0,
             };
             glz::schema tta_mode{
                 .description = "Enable TTA mode for better quality but slower processing",
@@ -315,71 +350,73 @@ class RealCUGANAdapter final : public EngineAdapter {
                 .minimum = -1,
                 .maximum = 3,
             };
-            glz::schema syncgap{
-                .description = "SyncGAP level (0 = no syncgap [fastest], 1 = syncgap [slowest], 2 = rough syncgap [slower], 3 = very rough syncgap [medium])",
+            glz::schema sync_gap{
+                .description = "SyncGAP level (0 = no sync_gap [fastest], 1 = sync_gap [slowest], 2 = rough sync_gap [slower], 3 = very rough sync_gap [medium])",
                 .minimum = 0,
                 .maximum = 3,
             };
         };
     };
 
-    RealCUGANAdapter() : EngineAdapter("realcugan") {}
+    RealCUGANAdapter() : EngineAdapter(u8"realcugan") {}
 
-    std::string get_engine_description() const override {
-        return engine_info ? engine_info->description : "Real-CUGAN super-resolution engine";
+    std::u8string get_engine_description() const override {
+        return this->engine_info ? this->engine_info->description : u8"Real-CUGAN super-resolution engine";
     }
 
-    std::string get_engine_version() const override {
-        return engine_info ? engine_info->version : "1.0.0";
+    std::u8string get_engine_version() const override {
+        return this->engine_info ? this->engine_info->version : u8"1.0.0";
     }
 
-    std::string get_json_schema() const override {
-        return glz::write_json_schema<Config>().value_or("");
+    std::u8string get_json_schema() const override {
+        return as_utf8(glz::write_json_schema<Config>().value_or(""));
     }
 
-    std::optional<SuperResolutionEngineConfig> parse_config(const char* config_json, size_t config_json_length, std::vector<std::string>& errors) const override {
+    std::optional<EngineConfigEx> parse_config(const char8_t* config_json, size_t config_json_length, std::vector<std::u8string>& errors) const override {
         if (config_json == nullptr || config_json_length == 0) {
-            errors.push_back("Empty configuration");
+            errors.push_back(u8"Empty configuration");
             return std::nullopt;
         }
 
-        std::string json_str(config_json, config_json_length);
-        auto result = glz::read_json<Config>(json_str);
+        const std::string_view json_sv(reinterpret_cast<const char*>(config_json), config_json_length);
 
-        if (!result.has_value()) {
-            push_glaze_errors(errors, result.error());
+        Config config;
+        auto error_ctx = glz::read<glz::opts{.null_terminated = false, .error_on_unknown_keys = false}>(config, json_sv);
+        if (error_ctx) {
+            push_glaze_errors(errors, error_ctx, json_sv);
             return std::nullopt;
         }
 
-        const auto& config = result.value();
-
-        SuperResolutionEngineConfig engine_config;
+        EngineConfigEx engine_config;
         engine_config.engine_name = this->engine_name;
-        engine_config.gpuid = config.gpuid;
+        engine_config.gpu_id = config.gpu_id;
         engine_config.tta_mode = config.tta_mode;
         engine_config.num_threads = config.num_threads;
         engine_config.model = config.model;
+        engine_config.model_dir = std::filesystem::u8path(config.model_dir);
         engine_config.noise = config.noise;
-        engine_config.syncgap = config.syncgap;
+        engine_config.sync_gap = config.sync_gap;
+
+        engine_config.tile_size = config.tile_size;
 
         return engine_config;
     }
 
-    void validate_config_extra(const SuperResolutionEngineConfig& engine_config, std::vector<std::string>& errors, std::vector<std::string>& warnings) const override {
+    void validate_config_extra(const EngineConfigEx& engine_config, std::vector<std::u8string>& errors, std::vector<std::u8string>& warnings) const override {
         if (engine_config.noise < -1 || engine_config.noise > 3) {
-            errors.push_back("Invalid noise level (valid values: -1, 0, 1, 2, 3)");
+            errors.push_back(u8"Invalid noise level (valid values: -1, 0, 1, 2, 3)");
         }
 
-        if (engine_config.syncgap < 0 || engine_config.syncgap > 3) {
-            errors.push_back("Invalid syncgap level (valid values: 0, 1, 2, 3)");
+        if (engine_config.sync_gap < 0 || engine_config.sync_gap > 3) {
+            errors.push_back(u8"Invalid sync_gap level (valid values: 0, 1, 2, 3)");
         }
     }
 };
 
 // Engine adapter registry
 class EngineAdapterRegistry final {
-    std::unordered_map<std::string, std::unique_ptr<EngineAdapter>> adapters;
-    std::vector<std::string> adapter_names;
+    std::unordered_map<std::u8string, std::unique_ptr<EngineAdapter>> adapters;
+    std::vector<std::u8string> adapter_names;
 
     EngineAdapterRegistry() {
         // Register all adapters
@@ -406,7 +443,7 @@ class EngineAdapterRegistry final {
         this->adapter_names.push_back(name);
     }
 
-    const EngineAdapter* get_adapter(const std::string& name) const {
+    const EngineAdapter* get_adapter(const std::u8string& name) const {
         const auto it = this->adapters.find(name);
         return it != this->adapters.end() ? it->second.get() : nullptr;
     }
@@ -416,11 +453,11 @@ class EngineAdapterRegistry final {
             return nullptr;
         }
 
-        const std::string& name = this->adapter_names[index];
+        const std::u8string& name = this->adapter_names[index];
         return this->get_adapter(name);
     }
 
-    const std::vector<std::string>& get_adapter_names() const {
+    const std::vector<std::u8string>& get_adapter_names() const {
         return this->adapter_names;
     }
 
@@ -483,7 +520,7 @@ UPSCLR_API const UpsclrEngineInfo* upsclr_plugin_get_engine_info(size_t engine_i
 
 UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_config(
     size_t engine_index,
-    const char* config_json,
+    const char8_t* config_json,
     size_t config_json_length) {
     std::lock_guard lk(g_mutex);
 
@@ -493,8 +530,8 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_conf
         return nullptr;
     }
 
-    std::vector<std::string> errors;
-    std::vector<std::string> warnings;
+    std::vector<std::u8string> errors;
+    std::vector<std::u8string> warnings;
 
     adapter->validate_config(config_json, config_json_length, errors, warnings);
 
@@ -529,9 +566,9 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_conf
 
     // Allocate and copy error messages
     if (!errors.empty()) {
-        const char** error_messages = new const char*[errors.size()];
+        const char8_t** error_messages = new const char8_t*[errors.size()];
         for (size_t i = 0; i < errors.size(); ++i) {
-            error_messages[i] = strdup(errors[i].c_str());
+            error_messages[i] = u8dup(errors[i].c_str());
         }
         result->error_messages = error_messages;
     } else {
@@ -540,9 +577,9 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_conf
 
     // Allocate and copy warning messages
     if (!warnings.empty()) {
-        const char** warning_messages = new const char*[warnings.size()];
+        const char8_t** warning_messages = new const char8_t*[warnings.size()];
         for (size_t i = 0; i < warnings.size(); ++i) {
-            warning_messages[i] = strdup(warnings[i].c_str());
+            warning_messages[i] = u8dup(warnings[i].c_str());
         }
         result->warning_messages = warning_messages;
     } else {
@@ -564,26 +601,44 @@ UPSCLR_API void upsclr_free_validation_result(const UpsclrEngineConfigValidation
 
 UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
     size_t engine_index,
-    const char* config_json,
+    const char8_t* config_json,
     size_t config_json_length) {
     std::lock_guard lk(g_mutex);
 
+    auto logger_error = spdlog::stderr_color_mt("stderr");
+
     const auto& registry = EngineAdapterRegistry::instance();
     const auto* adapter = registry.get_adapter(engine_index);
-
     if (adapter == nullptr) {
+        logger_error->error("[{}] adapter is nullptr", __func__);
         return nullptr;
     }
 
-    std::vector<std::string> errors;
-    auto engine = adapter->create_engine(config_json, config_json_length, errors);
+    std::vector<std::u8string> errors;
+    auto opt_engine_config = adapter->parse_config(config_json, config_json_length, errors);
+    if (!opt_engine_config.has_value()) {
+        logger_error->error("[{}] parse_config failed", __func__);
+        for (const auto& error : errors) {
+            logger_error->error("{}", as_string(error));
+        }
+        return nullptr;
+    }
+
+    auto& engine_config = opt_engine_config.value();
+    engine_config.logger_error = logger_error;
+
+    auto engine = adapter->create_engine(engine_config, errors);
     if (engine == nullptr) {
+        logger_error->error("[{}] create_engine failed", __func__);
+        for (const auto& error : errors) {
+            logger_error->error("{}", as_string(error));
+        }
         return nullptr;
     }
 
     auto instance = std::make_unique<UpsclrEngineInstance>();
     instance->engine = std::move(engine);
-    instance->process_config = instance->engine->create_default_process_config();
+    instance->engine_config = engine_config;
 
     const auto ptr_instance = instance.get();
     g_engine_instance_map.emplace(ptr_instance, std::move(instance));
@@ -653,11 +708,15 @@ UPSCLR_API UpsclrErrorCode upsclr_upscale(
         ncnn::Mat in(static_cast<int>(in_width), static_cast<int>(in_height), const_cast<unsigned char*>(in_data), static_cast<size_t>(in_channels), static_cast<int>(in_channels));
         ncnn::Mat out(static_cast<int>(in_width * scale), static_cast<int>(in_height * scale), out_data, static_cast<size_t>(in_channels), static_cast<int>(in_channels));
 
+        const auto tile_size = instance->engine_config.tile_size > 0 ? instance->engine_config.tile_size : instance->engine->get_default_tile_size();
+
         // Set process config
-        ProcessConfig process_config = instance->process_config;
-        process_config.scale = scale;
-        process_config.input_format = convert_color_format(in_color_format);
-        process_config.output_format = convert_color_format(out_color_format);
+        ProcessConfig process_config{
+            .scale = scale,
+            .input_format = convert_color_format(in_color_format),
+            .output_format = convert_color_format(out_color_format),
+            .tile_size = tile_size,
+        };
 
         // Process image
         const int result = instance->engine->process(in, out, process_config);

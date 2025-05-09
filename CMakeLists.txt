@@ -126,11 +126,24 @@ add_executable(upsclr-ncnn-vulkan
     src/engines/realcugan/realcugan.cpp
 )
 
+add_executable(upsclr-ncnn-vulkan-2
+    src/main2.cpp
+)
+
+find_package(cxxopts CONFIG REQUIRED)
+target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE cxxopts::cxxopts)
+
+find_package(glaze CONFIG REQUIRED)
+target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE glaze::glaze)
+target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE glaze::glaze)
+
 if(WIN32)
     target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
     target_compile_definitions(upsclr-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
+    target_compile_definitions(upsclr-ncnn-vulkan-2 PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
 
     target_sources(upsclr-ncnn-vulkan PRIVATE src/win_utf8.cpp)
+    target_sources(upsclr-ncnn-vulkan-2 PRIVATE src/win_utf8.cpp)
 endif()
 
 find_package(Vulkan REQUIRED)
@@ -143,12 +156,15 @@ target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE ncnn)
 
 find_package(Stb REQUIRED)
 target_include_directories(upsclr-ncnn-vulkan PRIVATE ${Stb_INCLUDE_DIR})
+target_include_directories(upsclr-ncnn-vulkan-2 PRIVATE ${Stb_INCLUDE_DIR})
 
 find_package(WebP CONFIG REQUIRED)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
+target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
 
 find_package(spdlog CONFIG REQUIRED)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
+target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE spdlog::spdlog_header_only)
 target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
 
 add_dependencies(upsclr-ncnn-vulkan generate-spirv)
@@ -192,6 +208,7 @@ if(OPENMP_FOUND)
     target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
+target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE upsclr-plugin-ncnn-vulkan)
 
 # Install the library
 install(TARGETS upsclr-plugin-ncnn-vulkan

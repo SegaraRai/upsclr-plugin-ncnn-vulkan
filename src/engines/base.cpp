@@ -107,7 +107,7 @@ void NetCache::clear() {
 
 SuperResolutionEngine::SuperResolutionEngine(const SuperResolutionEngineConfig& _config)
     : config(_config),
-      vkdev(config.gpuid >= 0 ? ncnn::get_gpu_device(config.gpuid) : nullptr),
+      vkdev(config.gpu_id >= 0 ? ncnn::get_gpu_device(config.gpu_id) : nullptr),
       net_cache([this](int scale) {
           auto net = this->create_net(scale, this->net_cache);
           if (net == nullptr) {
@@ -149,10 +149,6 @@ int SuperResolutionEngine::process(const ncnn::Mat& in, ncnn::Mat& out, const Pr
     } else {
         return this->process_cpu(in, config.input_format, out, config.output_format, config);
     }
-}
-
-ProcessConfig SuperResolutionEngine::create_default_process_config() const {
-    return ProcessConfig();
 }
 
 std::shared_ptr<ncnn::Net> SuperResolutionEngine::create_net_base() const {

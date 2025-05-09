@@ -1,5 +1,7 @@
 #include "realcugan.hpp"
 
+#include "../encoding_utils.hpp"
+
 #include "ncnn/cpu.h"
 
 #include <algorithm>
@@ -229,10 +231,10 @@ class RealCUGANSyncGapGPU {
         const int channels = in.elempack;
         const int scale = config.scale;
         const int prepadding = this->prepadding;
-        const int tilesize = config.tilesize;  // Use config.tilesize for standard stages
+        const int tile_size = config.tile_size;  // Use config.tile_size for standard stages
 
-        const int TILE_SIZE_X = tilesize;
-        const int TILE_SIZE_Y = tilesize;
+        const int TILE_SIZE_X = tile_size;
+        const int TILE_SIZE_Y = tile_size;
         const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;
 
         const size_t in_out_tile_elemsize = opt.use_fp16_storage ? 2u : 4u;
@@ -371,10 +373,10 @@ class RealCUGANSyncGapGPU {
         const int channels = in.elempack;
         const int scale = config.scale;
         const int prepadding = this->prepadding;
-        const int tilesize = config.tilesize;
+        const int tile_size = config.tile_size;
 
-        const int TILE_SIZE_X = tilesize;
-        const int TILE_SIZE_Y = tilesize;
+        const int TILE_SIZE_X = tile_size;
+        const int TILE_SIZE_Y = tile_size;
         const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
 
         const unsigned char* in_data = static_cast<const unsigned char*>(in.data);
@@ -421,10 +423,10 @@ class RealCUGANSyncGapGPU {
     int sync_gap(int gap_begin, int gap_end) {
         const int w = in.w;
         const int h = in.h;
-        const int tilesize = this->config.tilesize;
+        const int tile_size = this->config.tile_size;
 
-        const int TILE_SIZE_X = tilesize;
-        const int TILE_SIZE_Y = tilesize;
+        const int TILE_SIZE_X = tile_size;
+        const int TILE_SIZE_Y = tile_size;
         const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;
         const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
 
@@ -578,10 +580,10 @@ class RealCUGANSyncGapGPU {
         const int channels = in.elempack;
         const int scale = config.scale;
         const int prepadding = this->prepadding;
-        const int tilesize = config.tilesize;
+        const int tile_size = config.tile_size;
 
-        const int TILE_SIZE_X = tilesize;
-        const int TILE_SIZE_Y = tilesize;
+        const int TILE_SIZE_X = tile_size;
+        const int TILE_SIZE_Y = tile_size;
         const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
         const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;  // Need xtiles for output allocation
 
@@ -642,16 +644,16 @@ class RealCUGANSyncGapGPU {
     // --- Very Rough SE Methods ---
 
     int very_rough_stage0(int in_begin, int in_end, int out_begin, int out_end) {
-        // Similar to stage0 but with smaller tilesize and different loop steps
+        // Similar to stage0 but with smaller tile_size and different loop steps
         const int w = in.w;
         const int h = in.h;
         const int channels = in.elempack;
         const int scale = config.scale;
         const int prepadding = this->prepadding;
-        const int tilesize = RealCUGANSyncGapGPU::VERY_ROUGH_TILE_SIZE;  // Fixed for very_rough
+        const int tile_size = RealCUGANSyncGapGPU::VERY_ROUGH_TILE_SIZE;  // Fixed for very_rough
 
-        const int TILE_SIZE_X = tilesize;
-        const int TILE_SIZE_Y = tilesize;
+        const int TILE_SIZE_X = tile_size;
+        const int TILE_SIZE_Y = tile_size;
         const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;
         const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
 
@@ -744,14 +746,14 @@ class RealCUGANSyncGapGPU {
     }
 
     int very_rough_sync_gap(int gap_begin, int gap_end) {
-        // Similar to sync_gap but loads/averages only from processed tiles (step 3)
+        // Similar to sync gap but loads/averages only from processed tiles (step 3)
         // and saves the average to all 9 tiles in the 3x3 block.
         const int w = in.w;
         const int h = in.h;
-        const int tilesize = RealCUGANSyncGapGPU::VERY_ROUGH_TILE_SIZE;  // Fixed for very_rough
+        const int tile_size = RealCUGANSyncGapGPU::VERY_ROUGH_TILE_SIZE;  // Fixed for very_rough
 
-        const int TILE_SIZE_X = tilesize;
-        const int TILE_SIZE_Y = tilesize;
+        const int TILE_SIZE_X = tile_size;
+        const int TILE_SIZE_Y = tile_size;
         const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;
         const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
 
@@ -920,30 +922,19 @@ const SuperResolutionEngineInfo& RealCUGAN::engine_info() const {
     return RealCUGAN::get_engine_info();
 }
 
-ProcessConfig RealCUGAN::create_default_process_config() const {
-    // Get engine info
-    const auto& info = get_engine_info();
-
+int RealCUGAN::get_default_tile_size() const {
     // Determine tile size based on available GPU memory
     const uint32_t heap_budget = this->vkdev != nullptr ? this->vkdev->get_heap_budget() : 2000;
-
-    int tilesize = 0;
     if (heap_budget > 1900) {
-        tilesize = 400;
-    } else if (heap_budget > 550) {
-        tilesize = 200;
-    } else if (heap_budget > 190) {
-        tilesize = 100;
-    } else {
-        tilesize = 32;
+        return 400;
     }
-
-    return ProcessConfig{
-        .scale = 2,
-        .input_format = ColorFormat::RGB,
-        .output_format = ColorFormat::RGB,
-        .tilesize = tilesize,
-    };
+    if (heap_budget > 550) {
+        return 200;
+    }
+    if (heap_budget > 190) {
+        return 100;
+    }
+    return 32;
 }
 
 void RealCUGAN::prepare_net_options(ncnn::Option& options) const {
@@ -957,7 +948,7 @@ void RealCUGAN::prepare_net_options(ncnn::Option& options) const {
     options.use_int8_arithmetic = false;
 }
 
-std::string RealCUGAN::get_model_path(const std::string& model_type, int scale, int noise) const {
+std::u8string RealCUGAN::get_model_path(const std::u8string& model_type, int scale, int noise) const {
     constexpr const char* NOISE_SUFFIXES_DEFAULT[] = {
         "conservative",
         "no-denoise",
@@ -973,26 +964,26 @@ std::string RealCUGAN::get_model_path(const std::string& model_type, int scale, 
 
     if (scale < 2 || scale > 4) {
         this->config.logger_error->warn("[{}] Scale {} is not officially supported by RealCUGAN", __func__, scale);
-        return "";
+        return u8"";
     }
 
-    std::string model_path;
+    std::u8string model_path;
 
-    std::string current_type = model_type;
-    if (current_type == "models-nose" && (scale != 2)) {
+    std::u8string current_type = model_type;
+    if (current_type == u8"models-nose" && (scale != 2)) {
         this->config.logger_error->warn("[{}] models-nose does not support scale {}, falling back to models-se", __func__, scale);
-        current_type = "models-se";
-    } else if (current_type == "models-pro" && (scale != 2 && scale != 3)) {
+        current_type = u8"models-se";
+    } else if (current_type == u8"models-pro" && (scale != 2 && scale != 3)) {
         this->config.logger_error->warn("[{}] models-pro does not support scale {}, falling back to models-se", __func__, scale);
-        current_type = "models-se";
+        current_type = u8"models-se";
     }
 
-    if (current_type == "models-se") {
-        model_path = std::format("realcugan-se-up{}x-{}", scale, NOISE_SUFFIXES_DEFAULT[std::clamp(noise + 1, 0, 4)]);
-    } else if (current_type == "models-nose") {
-        model_path = std::format("realcugan-nose-up{}x-{}", scale, NOISE_SUFFIXES_NOSE[std::clamp(noise + 1, 0, 1)]);
-    } else if (current_type == "models-pro") {
-        model_path = std::format("realcugan-pro-up{}x-{}", scale, NOISE_SUFFIXES_DEFAULT[std::clamp(noise + 1, 0, 4)]);
+    if (current_type == u8"models-se") {
+        model_path = ascii_to_utf8(std::format("realcugan-se-up{}x-{}", scale, NOISE_SUFFIXES_DEFAULT[std::clamp(noise + 1, 0, 4)]));
+    } else if (current_type == u8"models-nose") {
+        model_path = ascii_to_utf8(std::format("realcugan-nose-up{}x-{}", scale, NOISE_SUFFIXES_NOSE[std::clamp(noise + 1, 0, 1)]));
+    } else if (current_type == u8"models-pro") {
+        model_path = ascii_to_utf8(std::format("realcugan-pro-up{}x-{}", scale, NOISE_SUFFIXES_DEFAULT[std::clamp(noise + 1, 0, 4)]));
     }
 
     return model_path;
@@ -1008,18 +999,18 @@ std::shared_ptr<ncnn::Net> RealCUGAN::create_net(int scale, const NetCache& net_
     }
 
     // Use default model if none specified
-    std::string model_name = this->config.model.empty() ? info.default_model : this->config.model;
+    std::u8string model_name = this->config.model.empty() ? info.default_model : this->config.model;
 
     // Check if model is supported
     if (!info.supports_model(model_name)) {
-        this->config.logger_error->warn("[{}] Model '{}' is not officially supported by RealCUGAN", __func__, model_name);
+        this->config.logger_error->warn("[{}] Model '{}' is not officially supported by RealCUGAN", __func__, utf8_to_ascii(model_name));
     }
 
     // Get model path based on model type, scale and noise
-    std::string model_path = get_model_path(model_name, scale, this->config.noise);
+    std::u8string model_path = get_model_path(model_name, scale, this->config.noise);
 
     auto net = this->create_net_base();
-    this->net_load_model_and_param(*net, this->config.model_dir / (model_path + ".param"));
+    this->net_load_model_and_param(*net, this->config.model_dir / (model_path + u8".param"));
 
     return net;
 }
@@ -1142,13 +1133,13 @@ std::shared_ptr<SuperResolutionPipelines> RealCUGAN::create_pipelines(int scale,
 }
 
 int RealCUGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
-    // Check if syncgap is enabled and use appropriate processing method
-    if (this->config.syncgap > 0 && config.tilesize < std::max(in.w, in.h)) {
-        if (this->config.syncgap == 1) {
+    // Check if sync gap is enabled and use appropriate processing method
+    if (this->config.sync_gap > 0 && config.tile_size < std::max(in.w, in.h)) {
+        if (this->config.sync_gap == 1) {
             return process_gpu_se(in, in_format, out, out_format, config);
-        } else if (this->config.syncgap == 2) {
+        } else if (this->config.sync_gap == 2) {
             return process_gpu_se_rough(in, in_format, out, out_format, config);
-        } else if (this->config.syncgap == 3) {
+        } else if (this->config.sync_gap == 3) {
             return process_gpu_se_very_rough(in, in_format, out, out_format, config);
         }
     }
@@ -1165,11 +1156,11 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
 
     // Get parameters from config
     const int scale = config.scale;
-    const int tilesize = config.tilesize;
+    const int tile_size = config.tile_size;
     const int prepadding = get_prepadding_for_scale(scale);
 
-    if (w < 1 || h < 1 || (channels != 3 && channels != 4) || tilesize < 1 || prepadding < 0 || scale < 1) {
-        this->config.logger_error->error("[{}] Invalid input parameters: w={}, h={}, channels={}, tilesize={}, prepadding={}, scale={}", __func__, w, h, channels, tilesize, prepadding, scale);
+    if (w < 1 || h < 1 || (channels != 3 && channels != 4) || tile_size < 1 || prepadding < 0 || scale < 1) {
+        this->config.logger_error->error("[{}] Invalid input parameters: w={}, h={}, channels={}, tile_size={}, prepadding={}, scale={}", __func__, w, h, channels, tile_size, prepadding, scale);
         return -1;
     }
 
@@ -1218,8 +1209,8 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
     const auto storage_mode = get_storage_mode(opt);
 
     // Calculate tiles
-    const int TILE_SIZE_X = tilesize;
-    const int TILE_SIZE_Y = tilesize;
+    const int TILE_SIZE_X = tile_size;
+    const int TILE_SIZE_Y = tile_size;
 
     const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;
     const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;

@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <uchar.h>
 
 #if defined(_WIN32) || defined(_WIN64)
 #    ifdef UPSCLR_EXPORTS
@@ -38,9 +39,9 @@ extern "C" {
  * @brief Structure containing information about the plugin itself
  */
 typedef struct UpsclrPluginInfo {
-    const char* name;        /**< Name of the plugin */
-    const char* version;     /**< Version of the plugin */
-    const char* description; /**< Description of the plugin */
+    const char8_t* name;        /**< Name of the plugin */
+    const char8_t* version;     /**< Version of the plugin */
+    const char8_t* description; /**< Description of the plugin */
 } UpsclrPluginInfo;
 
 /**
@@ -48,10 +49,10 @@ typedef struct UpsclrPluginInfo {
  * @brief Structure containing information about an upscale engine
  */
 typedef struct UpsclrEngineInfo {
-    const char* name;               /**< Name of the engine */
-    const char* description;        /**< Description of the engine */
-    const char* version;            /**< Version of the engine */
-    const char* config_json_schema; /**< JSON schema for engine configuration */
+    const char8_t* name;               /**< Name of the engine */
+    const char8_t* description;        /**< Description of the engine */
+    const char8_t* version;            /**< Version of the engine */
+    const char8_t* config_json_schema; /**< JSON schema for engine configuration */
 } UpsclrEngineInfo;
 
 /**
@@ -70,8 +71,8 @@ typedef struct UpsclrEngineConfigValidationResult {
     bool is_valid;                 /**< Whether the configuration is valid */
     size_t error_count;            /**< Number of errors */
     size_t warning_count;          /**< Number of warnings */
-    const char** warning_messages; /**< Array of warning messages */
-    const char** error_messages;   /**< Array of error messages */
+    const char8_t** warning_messages; /**< Array of warning messages */
+    const char8_t** error_messages;   /**< Array of error messages */
 } UpsclrEngineConfigValidationResult;
 
 /**
@@ -125,7 +126,7 @@ UPSCLR_API const UpsclrEngineInfo* upsclr_plugin_get_engine_info(size_t engine_i
  * @param config_json_length Length of the configuration string in bytes
  * @return Pointer to a structure containing validation results. Must be freed with `upsclr_free_validation_result` after use.
  */
-UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_config(size_t engine_index, const char* config_json, size_t config_json_length);
+UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_config(size_t engine_index, const char8_t* config_json, size_t config_json_length);
 
 /**
  * @brief Free memory allocated for validation results
@@ -142,7 +143,7 @@ UPSCLR_API void upsclr_free_validation_result(const UpsclrEngineConfigValidation
  * @param config_json_length Length of the configuration string in bytes
  * @return Pointer to the created engine instance. NULL on failure. Must be freed with `upsclr_plugin_destroy_engine_instance` after use.
  */
-UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(size_t engine_index, const char* config_json, size_t config_json_length);
+UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(size_t engine_index, const char8_t* config_json, size_t config_json_length);
 
 /**
  * @brief Destroy an engine instance

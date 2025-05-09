@@ -22,6 +22,7 @@
 #include "gpu.h"
 #include "platform.h"
 
+#include "engines/encoding_utils.hpp"
 #include "engines/engine_factory.hpp"
 
 namespace fs = std::filesystem;
@@ -120,6 +121,10 @@ namespace {
 std::wstring tow(std::string_view ascii_str) {
     return std::wstring(ascii_str.begin(), ascii_str.end());
 }
+
+std::wstring tow(std::u8string_view ascii_str) {
+    return std::wstring(ascii_str.begin(), ascii_str.end());
+}
 #endif
 
 path_t get_file_extension(const path_t& path) {
@@ -203,23 +208,23 @@ void print_usage() {
     fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
     fprintf(stderr, "  -v                   verbose output\n");
     fprintf(stderr, "  -y noise             noise level (-1/0/1/2/3, default=0, only for realcugan)\n");
-    fprintf(stderr, "  -z syncgap           sync gap mode (0/1/2/3, default=0, only for realcugan)\n");
+    fprintf(stderr, "  -z sync-gap          sync gap mode (0/1/2/3, default=0, only for realcugan)\n");
 
     // Print available engines
     fprintf(stderr, "\nAvailable engines:\n");
     auto engines = SuperResolutionEngineFactory::get_available_engines();
     for (const auto& engine : engines) {
         const auto* info = SuperResolutionEngineFactory::get_engine_info(engine);
-        fprintf(stderr, "  %s: %s\n", engine.c_str(), info->description.c_str());
+        fprintf(stderr, "  %s: %s\n", utf8_to_ascii(engine).c_str(), utf8_to_ascii(info->description).c_str());
         fprintf(stderr, "    Models: ");
         for (size_t i = 0; i < info->model_names.size(); ++i) {
-            fprintf(stderr, "%s", info->model_names[i].c_str());
+            fprintf(stderr, "%s", utf8_to_ascii(info->model_names[i]).c_str());
             if (i < info->model_names.size() - 1) {
                 fprintf(stderr, ", ");
             }
         }
         fprintf(stderr, "\n");
-        fprintf(stderr, "    Default model: %s\n", info->default_model.c_str());
+        fprintf(stderr, "    Default model: %s\n", utf8_to_ascii(info->default_model).c_str());
         if (info->supports(SuperResolutionFeatureFlags::NOISE)) {
             fprintf(stderr, "    Default noise: %d\n", info->default_noise);
         }
@@ -252,21 +257,21 @@ class TaskQueue {
 
         while (tasks.size() >= 8)  // FIXME hardcode queue length
         {
-            condition.wait(lock);
+            cv.wait(lock);
         }
 
         tasks.push(v);
 
         lock.unlock();
 
-        condition.notify_one();
+        cv.notify_one();
     }
 
     void get(Task& v) {
         std::unique_lock lock(mutex);
 
         while (tasks.size() == 0) {
-            condition.wait(lock);
+            cv.wait(lock);
         }
 
         v = tasks.front();
@@ -274,12 +279,12 @@ class TaskQueue {
 
         lock.unlock();
 
-        condition.notify_one();
+        cv.notify_one();
     }
 
    private:
     std::mutex mutex;
-    std::condition_variable condition;
+    std::condition_variable cv;
     std::queue<Task> tasks;
 };
 
@@ -389,7 +394,7 @@ void* load(void* args) {
             .output_format = ColorFormat::RGB,
 #endif
 
-            .tilesize = 200,
+            .tile_size = 200,
         };
 
         if (const auto ext = get_file_extension(v.outpath); c == 4 && (ext == PATHSTR(".jpg") || ext == PATHSTR(".JPG") || ext == PATHSTR(".jpeg") || ext == PATHSTR(".JPEG"))) {
@@ -414,7 +419,7 @@ class ProcThreadParams {
 void* proc(void* args) {
     const ProcThreadParams* ptp = static_cast<const ProcThreadParams*>(args);
     const SuperResolutionEngine* engine = ptp->engine;
-    const auto tilesize = ptp->default_config.tilesize;
+    const auto tile_size = ptp->default_config.tile_size;
 
     for (;;) {
         Task v;
@@ -425,7 +430,7 @@ void* proc(void* args) {
             break;
         }
 
-        v.config.tilesize = tilesize;
+        v.config.tile_size = tile_size;
 
         const auto tp_begin = std::chrono::steady_clock::now();
         engine->process(v.inimage, v.outimage, v.config);
@@ -478,11 +483,11 @@ void* save(void* args) {
 
         const auto ext = get_file_extension(v.outpath);
 
-        /* ----------- Create folder if not exists -------------------*/
+        // create folder if not exists
         const fs::path fs_path = fs::absolute(v.outpath);
         const std::string parent_path = fs_path.parent_path().string();
         if (fs::exists(parent_path) != 1) {
-            stp->logger_info->info("Create folder: [{}]", parent_path);
+            stp->logger_info->info("Create folder: {}", parent_path);
             fs::create_directories(parent_path);
         }
 
@@ -530,13 +535,13 @@ int main(int argc, char** argv)
     path_t inputpath;
     path_t outputpath;
     int scale = 4;
-    std::vector<int> tilesize;
+    std::vector<int> tile_size;
     path_t model = PATHSTR("models");
     std::string modelname = "";
     std::string engine_name = "realesrgan";
     int noise = 0;
-    int syncgap = 0;
-    std::vector<int> gpuid;
+    int sync_gap = 0;
+    std::vector<int> gpu_id;
     int jobs_load = 1;
     std::vector<int> jobs_proc;
     int jobs_save = 2;
@@ -559,7 +564,7 @@ int main(int argc, char** argv)
                 scale = _wtoi(optarg);
                 break;
             case L't':
-                tilesize = parse_optarg_int_array(optarg);
+                tile_size = parse_optarg_int_array(optarg);
                 break;
             case L'm':
                 model = optarg;
@@ -575,7 +580,7 @@ int main(int argc, char** argv)
                 engine_name.resize(wcslen(optarg));
                 break;
             case L'g':
-                gpuid = parse_optarg_int_array(optarg);
+                gpu_id = parse_optarg_int_array(optarg);
                 break;
             case L'j':
                 swscanf(optarg, L"%d:%*[^:]:%d", &jobs_load, &jobs_save);
@@ -594,7 +599,7 @@ int main(int argc, char** argv)
                 noise = _wtoi(optarg);
                 break;
             case L'z':
-                syncgap = _wtoi(optarg);
+                sync_gap = _wtoi(optarg);
                 break;
             case L'h':
             default:
@@ -616,7 +621,7 @@ int main(int argc, char** argv)
                 scale = atoi(optarg);
                 break;
             case 't':
-                tilesize = parse_optarg_int_array(optarg);
+                tile_size = parse_optarg_int_array(optarg);
                 break;
             case 'm':
                 model = optarg;
@@ -628,7 +633,7 @@ int main(int argc, char** argv)
                 engine_name = optarg;
                 break;
             case 'g':
-                gpuid = parse_optarg_int_array(optarg);
+                gpu_id = parse_optarg_int_array(optarg);
                 break;
             case 'j':
                 sscanf(optarg, "%d:%*[^:]:%d", &jobs_load, &jobs_save);
@@ -647,7 +652,7 @@ int main(int argc, char** argv)
                 noise = atoi(optarg);
                 break;
             case 'z':
-                syncgap = atoi(optarg);
+                sync_gap = atoi(optarg);
                 break;
             case 'h':
             default:
@@ -662,18 +667,18 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    if (gpuid.empty()) {
+    if (gpu_id.empty()) {
         if (verbose) {
             logger_info->info("No GPU specified, using default GPU device {}", ncnn::get_default_gpu_index());
         }
-        gpuid.push_back(ncnn::get_default_gpu_index());
+        gpu_id.push_back(ncnn::get_default_gpu_index());
     }
 
-    if (tilesize.empty()) {
+    if (tile_size.empty()) {
         if (verbose) {
-            logger_info->info("No tilesize specified, using default tilesize 0");
+            logger_info->info("No tile_size specified, using default tile_size 0");
         }
-        tilesize.push_back(0);
+        tile_size.push_back(0);
     }
 
     if (jobs_proc.empty()) {
@@ -688,14 +693,14 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    if (tilesize.size() != 1 && tilesize.size() != gpuid.size()) {
-        logger_error->error("Invalid tilesize: expected 1 or {} tilesize, got {}", gpuid.size(), tilesize.size());
+    if (tile_size.size() != 1 && tile_size.size() != gpu_id.size()) {
+        logger_error->error("Invalid tile_size: expected 1 or {} tile_size, got {}", gpu_id.size(), tile_size.size());
         return -1;
     }
 
-    for (const auto tile : tilesize) {
+    for (const auto tile : tile_size) {
         if (tile != 0 && tile < 32) {
-            logger_error->error("Invalid tilesize: expected >=32 or 0, got {}", tile);
+            logger_error->error("Invalid tile_size: expected >=32 or 0, got {}", tile);
             return -1;
         }
     }
@@ -705,13 +710,13 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    if (syncgap < 0 || syncgap > 3) {
-        logger_error->error("Invalid syncgap: expected 0/1/2/3, got {}", syncgap);
+    if (sync_gap < 0 || sync_gap > 3) {
+        logger_error->error("Invalid sync_gap: expected 0/1/2/3, got {}", sync_gap);
         return -1;
     }
 
-    if (jobs_proc.size() != 1 && jobs_proc.size() != gpuid.size()) {
-        logger_error->error("Invalid jobs_proc: expected 1 or {} jobs_proc, got {}", gpuid.size(), jobs_proc.size());
+    if (jobs_proc.size() != 1 && jobs_proc.size() != gpu_id.size()) {
+        logger_error->error("Invalid jobs_proc: expected 1 or {} jobs_proc, got {}", gpu_id.size(), jobs_proc.size());
         return -1;
     }
 
@@ -787,18 +792,18 @@ int main(int argc, char** argv)
         }
     }
 
-    const auto* engine_info = SuperResolutionEngineFactory::get_engine_info(engine_name);
+    const auto* engine_info = SuperResolutionEngineFactory::get_engine_info(ascii_to_utf8(engine_name));
     if (!engine_info) {
         logger_error->error("Unknown engine: '{}'", engine_name);
         return -1;
     }
 
     if (modelname.empty()) {
-        modelname = engine_info->default_model;
+        modelname = utf8_to_ascii(engine_info->default_model);
     }
 
     if (!std::ranges::any_of(engine_info->model_names, [&modelname](const auto& name) {
-            return name == modelname;
+            return name == ascii_to_utf8(modelname);
         })) {
         logger_error->error("Unknown model: '{}'", modelname);
         return -1;
@@ -810,14 +815,14 @@ int main(int argc, char** argv)
 
     ncnn::create_gpu_instance();
 
-    const auto use_gpu_count = gpuid.size();
+    const auto use_gpu_count = gpu_id.size();
 
     if (jobs_proc.size() != use_gpu_count) {
         jobs_proc.resize(use_gpu_count, jobs_proc[0]);
     }
 
-    if (tilesize.size() != use_gpu_count) {
-        tilesize.resize(use_gpu_count, tilesize[0]);
+    if (tile_size.size() != use_gpu_count) {
+        tile_size.resize(use_gpu_count, tile_size[0]);
     }
 
     const int cpu_count = std::max(1, ncnn::get_cpu_count());
@@ -826,8 +831,8 @@ int main(int argc, char** argv)
 
     int gpu_count = ncnn::get_gpu_count();
     for (std::size_t i = 0; i < use_gpu_count; i++) {
-        if (gpuid[i] < 0 || gpuid[i] >= gpu_count) {
-            logger_error->error("Invalid gpu device: {} (expected: 0-{})", gpuid[i], gpu_count - 1);
+        if (gpu_id[i] < 0 || gpu_id[i] >= gpu_count) {
+            logger_error->error("Invalid gpu device: {} (expected: 0-{})", gpu_id[i], gpu_count - 1);
 
             ncnn::destroy_gpu_instance();
             return -1;
@@ -836,7 +841,7 @@ int main(int argc, char** argv)
 
     int total_jobs_proc = 0;
     for (std::size_t i = 0; i < use_gpu_count; i++) {
-        const int gpu_queue_count = ncnn::get_gpu_info(gpuid[i]).compute_queue_count();
+        const int gpu_queue_count = ncnn::get_gpu_info(gpu_id[i]).compute_queue_count();
         jobs_proc[i] = std::min(jobs_proc[i], gpu_queue_count);
         total_jobs_proc += jobs_proc[i];
     }
@@ -847,30 +852,29 @@ int main(int argc, char** argv)
         for (std::size_t i = 0; i < use_gpu_count; i++) {
             SuperResolutionEngineConfig config{
                 .model_dir = fs::path(model),
-                .model = modelname,
+                .model = ascii_to_utf8(modelname),
 
-                .gpuid = gpuid[i],
+                .gpu_id = gpu_id[i],
                 .tta_mode = tta_mode != 0,
                 .num_threads = 1,
 
                 .noise = noise,
-                .syncgap = syncgap,
+                .sync_gap = sync_gap,
 
-                .logger_info = logger_info,
                 .logger_error = logger_error,
             };
 
 #if _WIN32
-            logger_info->info(L"Creating {} instance for gpuid={}, model={}, model_dir={}", tow(engine_name), config.gpuid, tow(config.model), config.model_dir.wstring());
+            logger_info->info(L"Creating {} instance for gpu_id={}, model={}, model_dir={}", tow(engine_name), config.gpu_id, tow(config.model), config.model_dir.wstring());
 #else
-            logger_info->info("Creating {} instance for gpuid={}, model={}, model_dir={}", engine_name, config.gpuid, config.model, config.model_dir.string());
+            logger_info->info("Creating {} instance for gpu_id={}, model={}, model_dir={}", engine_name, config.gpu_id, config.model, config.model_dir.string());
 #endif
 
-            auto engine = SuperResolutionEngineFactory::create_engine(engine_name, config);
+            auto engine = SuperResolutionEngineFactory::create_engine(ascii_to_utf8(engine_name), config);
 
             // Check if the instance was created successfully
             if (engine == nullptr) {
-                logger_error->error("Failed to create {} instance for gpuid={}", engine_name, config.gpuid);
+                logger_error->error("Failed to create {} instance for gpu_id={}", engine_name, config.gpu_id);
                 return -1;
             }
 
@@ -898,7 +902,8 @@ int main(int argc, char** argv)
             std::vector<ProcThreadParams> ptp(use_gpu_count);
             for (std::size_t i = 0; i < use_gpu_count; i++) {
                 ptp[i].engine = engines[i].get();
-                ptp[i].default_config = engines[i]->create_default_process_config();
+                ptp[i].default_config = ProcessConfig();
+                ptp[i].default_config.tile_size = engines[i]->get_default_tile_size();
                 ptp[i].total_elapsed = &total_elapsed;
 
                 // Override scale if specified
@@ -906,9 +911,9 @@ int main(int argc, char** argv)
                     ptp[i].default_config.scale = scale;
                 }
 
-                // Override tilesize if specified
-                if (!tilesize.empty() && tilesize[i] > 0) {
-                    ptp[i].default_config.tilesize = tilesize[i];
+                // Override tile_size if specified
+                if (!tile_size.empty() && tile_size[i] > 0) {
+                    ptp[i].default_config.tile_size = tile_size[i];
                 }
             }
 

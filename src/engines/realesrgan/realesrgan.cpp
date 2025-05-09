@@ -1,5 +1,7 @@
 #include "realesrgan.hpp"
 
+#include "../encoding_utils.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <format>
@@ -103,30 +105,19 @@ const SuperResolutionEngineInfo& RealESRGAN::engine_info() const {
     return RealESRGAN::get_engine_info();
 }
 
-ProcessConfig RealESRGAN::create_default_process_config() const {
-    // Get engine info
-    const auto& info = get_engine_info();
-
+int RealESRGAN::get_default_tile_size() const {
     // Determine tile size based on available GPU memory
     const uint32_t heap_budget = this->vkdev != nullptr ? this->vkdev->get_heap_budget() : 2000;
-
-    int tilesize = 0;
     if (heap_budget > 1900) {
-        tilesize = 200;
-    } else if (heap_budget > 550) {
-        tilesize = 100;
-    } else if (heap_budget > 190) {
-        tilesize = 64;
-    } else {
-        tilesize = 32;
+        return 200;
     }
-
-    return ProcessConfig{
-        .scale = 2,
-        .input_format = ColorFormat::RGB,
-        .output_format = ColorFormat::RGB,
-        .tilesize = tilesize,
-    };
+    if (heap_budget > 550) {
+        return 100;
+    }
+    if (heap_budget > 190) {
+        return 64;
+    }
+    return 32;
 }
 
 void RealESRGAN::prepare_net_options(ncnn::Option& options) const {
@@ -145,17 +136,17 @@ std::shared_ptr<ncnn::Net> RealESRGAN::create_net(int scale, const NetCache& net
     const auto& info = get_engine_info();
 
     // Use default model if none specified
-    std::string model_name = this->config.model.empty() ? info.default_model : this->config.model;
+    std::u8string model_name = this->config.model.empty() ? info.default_model : this->config.model;
 
     // Check if model is supported
     if (!info.supports_model(model_name)) {
-        this->config.logger_error->error("Model '{}' is not supported by RealESRGAN", model_name);
+        this->config.logger_error->error("Model '{}' is not supported by RealESRGAN", utf8_to_ascii(model_name));
     }
 
-    std::string basename;
-    if (model_name == "realesr-animevideov3") {
+    std::u8string basename;
+    if (model_name == u8"realesr-animevideov3") {
         // For `realesr-animevideov3`, the model depends on the scale
-        basename = std::format("{}-x{}", model_name, scale);
+        basename = ascii_to_utf8(std::format("{}-x{}", utf8_to_ascii(model_name), scale));
     } else {
         // For other models, the scale is not part of the model name
         // Use scale 1 for the representative model for convenience
@@ -168,7 +159,7 @@ std::shared_ptr<ncnn::Net> RealESRGAN::create_net(int scale, const NetCache& net
     }
 
     auto net = this->create_net_base();
-    this->net_load_model_and_param(*net, this->config.model_dir / (basename + ".param"));
+    this->net_load_model_and_param(*net, this->config.model_dir / (basename + u8".param"));
 
     return net;
 }
@@ -264,11 +255,11 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
 
     // Get parameters from config
     const int scale = config.scale;
-    const int tilesize = config.tilesize;
+    const int tile_size = config.tile_size;
     const int prepadding = REALESRGAN_PREPADDING;
 
-    if (w < 1 || h < 1 || (channels != 3 && channels != 4) || tilesize < 1 || prepadding < 0 || scale < 1) {
-        this->config.logger_error->error("[{}] Invalid input parameters: w={}, h={}, channels={}, tilesize={}, prepadding={}, scale={}", __func__, w, h, channels, tilesize, prepadding, scale);
+    if (w < 1 || h < 1 || (channels != 3 && channels != 4) || tile_size < 1 || prepadding < 0 || scale < 1) {
+        this->config.logger_error->error("[{}] Invalid input parameters: w={}, h={}, channels={}, tile_size={}, prepadding={}, scale={}", __func__, w, h, channels, tile_size, prepadding, scale);
         return -1;
     }
 
@@ -317,8 +308,8 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
     const auto storage_mode = get_storage_mode(opt);
 
     // Calculate tiles
-    const int TILE_SIZE_X = tilesize;
-    const int TILE_SIZE_Y = tilesize;
+    const int TILE_SIZE_X = tile_size;
+    const int TILE_SIZE_Y = tile_size;
 
     const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;
     const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
