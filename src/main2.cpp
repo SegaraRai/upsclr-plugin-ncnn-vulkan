@@ -123,7 +123,7 @@ class PluginManager final {
                 upsclr_plugin_destroy_engine_instance(instance);
             });
 
-        if (!instance) {
+        if (instance == nullptr) {
             logger_error->error("Failed to create engine instance (engine index {})", engine_idx);
         }
     }
@@ -131,7 +131,7 @@ class PluginManager final {
     ~PluginManager() = default;
 
     UpsclrErrorCode preload(int scale) {
-        if (!instance) {
+        if (instance == nullptr) {
             return UPSCLR_ERROR_ENGINE_NOT_FOUND;
         }
 
@@ -139,7 +139,7 @@ class PluginManager final {
     }
 
     UpsclrErrorCode process(void* in_data, int in_width, int in_height, int in_channels, void* out_data, int out_width, int out_height, int out_channels, int scale, UpsclrColorFormat in_format, UpsclrColorFormat out_format) {
-        if (!instance) {
+        if (instance == nullptr) {
             return UPSCLR_ERROR_ENGINE_NOT_FOUND;
         }
 
@@ -163,7 +163,7 @@ class PluginManager final {
         fprintf(stderr, "\nAvailable engines:\n");
         for (size_t i = 0; i < engine_count; ++i) {
             const auto* info = upsclr_plugin_get_engine_info(i);
-            if (!info) {
+            if (info == nullptr) {
                 continue;
             }
 
@@ -200,7 +200,7 @@ class PluginManager final {
 
         for (size_t i = 0; i < engine_count; ++i) {
             const auto* info = upsclr_plugin_get_engine_info(i);
-            if (!info) {
+            if (info == nullptr) {
                 continue;
             }
 
@@ -331,7 +331,7 @@ void load(const LoadThreadParams& ltp) {
 #else
         FILE* fp = fopen(image_path.string().c_str(), "rb");
 #endif
-        if (!fp) {
+        if (fp == nullptr) {
             continue;
         }
 
@@ -349,17 +349,17 @@ void load(const LoadThreadParams& ltp) {
         if (length > 12 && file_data[0] == 'R' && file_data[8] == 'W') {
             // RIFF____WEBP
             in_image_data = webp_load(file_data.get(), length, &w, &h, &c);
-            if (in_image_data) {
+            if (in_image_data != nullptr) {
                 webp = 1;
             }
         }
-        if (!in_image_data) {
+        if (in_image_data == nullptr) {
             // not webp, try jpg png etc.
 #if _WIN32
             in_image_data = wic_decode_image(image_path.wstring().c_str(), &w, &h, &c);
 #else   // _WIN32
             in_image_data = stbi_load_from_memory(file_data.get(), length, &w, &h, &c, 0);
-            if (in_image_data) {
+            if (in_image_data != nullptr) {
                 // stb_image auto channel
                 if (c == 1) {
                     // grayscale -> rgb
@@ -376,7 +376,7 @@ void load(const LoadThreadParams& ltp) {
 #endif  // _WIN32
         }
 
-        if (!in_image_data) {
+        if (in_image_data == nullptr) {
             ltp.logger_error->error(PATHSTR("Decode failed: {}"), p2s(image_path));
             continue;
         }
@@ -571,8 +571,8 @@ std::vector<int> parse_int_list(const std::string& str) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    auto logger_info = spdlog::stdout_color_mt("console");
-    auto logger_error = spdlog::stderr_color_mt("stderr");
+    const auto logger_info = spdlog::stdout_color_mt("console");
+    const auto logger_error = spdlog::stderr_color_mt("stderr");
 
     // Parse command line arguments
     cxxopts::Options options("upsclr-ncnn-vulkan-2", "Image super-resolution using upsclr-plugin-ncnn-vulkan");
@@ -594,7 +594,7 @@ int main(int argc, char** argv) {
         ("y,noise", "Noise level (-1/0/1/2/3, only for realcugan)", cxxopts::value<int>()->default_value("0"))               //
         ("z,sync-gap", "Sync gap mode (0/1/2/3, only for realcugan)", cxxopts::value<int>()->default_value("0"));
 
-    auto result = options.parse(argc, argv);
+    const auto result = options.parse(argc, argv);
 
     if (result.count("help")) {
         print_usage();
@@ -786,21 +786,21 @@ int main(int argc, char** argv) {
     {
         if (std::filesystem::is_directory(input_path) && std::filesystem::is_directory(output_path)) {
             std::vector<std::filesystem::path> filenames;
-            int lr = list_directory(input_path, filenames);
-            if (lr != 0) {
+            if (list_directory(input_path, filenames) != 0) {
                 return -1;
             }
 
-            const int count = filenames.size();
+            const size_t count = filenames.size();
             input_files.resize(count);
             output_files.resize(count);
 
             std::filesystem::path last_filename;
             std::filesystem::path last_filename_noext;
-            for (int i = 0; i < count; i++) {
+            for (size_t i = 0; i < count; i++) {
                 std::filesystem::path filename = filenames[i];
                 std::filesystem::path filename_noext = filename.stem();
-                std::filesystem::path output_filename = filename.replace_extension(format);
+                std::filesystem::path output_filename = filename;
+                output_filename.replace_extension(format);
 
                 // filename list is sorted, check if output image path conflicts
                 if (filename_noext == last_filename_noext) {
@@ -832,7 +832,7 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    const auto engine_info = upsclr_plugin_get_engine_info(engine_index);
+    const auto* engine_info = upsclr_plugin_get_engine_info(engine_index);
     if (engine_info == nullptr) {
         logger_error->error("Unknown engine: '{}'", utf8_to_ascii(engine_name));
         return -1;

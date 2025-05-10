@@ -11,17 +11,14 @@
 #include "realesrgan/realesrgan.hpp"
 // #include "waifu2x/waifu2x.hpp"
 
-// Helper function to register all engines
-static std::vector<std::u8string> get_all_engine_names() {
-    return {
-        u8"realesrgan",
-        u8"realcugan",
-        // u8"waifu2x"
-    };
-}
+static std::vector<std::u8string> ALL_ENGINE_NAMES{
+    u8"realesrgan",
+    u8"realcugan",
+    // u8"waifu2x",
+};
 
-std::vector<std::u8string> SuperResolutionEngineFactory::get_available_engines() {
-    return get_all_engine_names();
+const std::vector<std::u8string>& SuperResolutionEngineFactory::get_available_engines() {
+    return ALL_ENGINE_NAMES;
 }
 
 const SuperResolutionEngineInfo* SuperResolutionEngineFactory::get_engine_info(const std::u8string& engine_name) {
@@ -39,29 +36,16 @@ const SuperResolutionEngineInfo* SuperResolutionEngineFactory::get_engine_info(c
 }
 
 std::unique_ptr<SuperResolutionEngine> SuperResolutionEngineFactory::create_engine(
-    const std::u8string& engine_name,
     const SuperResolutionEngineConfig& config) {
-    SuperResolutionEngineConfig cfg = config;
-    cfg.engine_name = engine_name;
-
-    if (engine_name == u8"realesrgan") {
-        return std::make_unique<RealESRGAN>(cfg);
+    if (config.engine_name == u8"realesrgan") {
+        return std::make_unique<RealESRGAN>(config);
     }
-    if (engine_name == u8"realcugan") {
-        return std::make_unique<RealCUGAN>(cfg);
+    if (config.engine_name == u8"realcugan") {
+        return std::make_unique<RealCUGAN>(config);
     }
-    // if (engine_name == u8"waifu2x") {
-    //     return std::make_unique<Waifu2x>(cfg);
+    // if (config.engine_name == u8"waifu2x") {
+    //     return std::make_unique<Waifu2x>(config);
     // }
-
-    throw std::runtime_error("Unknown engine: " + utf8_to_ascii(engine_name));
-}
-
-std::unique_ptr<SuperResolutionEngine> SuperResolutionEngineFactory::create_engine(
-    const SuperResolutionEngineConfig& config) {
-    if (!config.engine_name.empty()) {
-        return create_engine(config.engine_name, config);
-    }
 
     return nullptr;
 }

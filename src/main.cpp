@@ -56,11 +56,11 @@ static wchar_t getopt(int argc, wchar_t* const argv[], const wchar_t* optstring)
 
     wchar_t opt = argv[optind][1];
     const wchar_t* p = wcschr(optstring, opt);
-    if (p == NULL) {
+    if (p == nullptr) {
         return L'?';
     }
 
-    optarg = NULL;
+    optarg = nullptr;
 
     if (p[1] == L':') {
         optind++;
@@ -212,8 +212,7 @@ void print_usage() {
 
     // Print available engines
     fprintf(stderr, "\nAvailable engines:\n");
-    auto engines = SuperResolutionEngineFactory::get_available_engines();
-    for (const auto& engine : engines) {
+    for (const auto& engine : SuperResolutionEngineFactory::get_available_engines()) {
         const auto* info = SuperResolutionEngineFactory::get_engine_info(engine);
         fprintf(stderr, "  %s: %s\n", utf8_to_ascii(engine).c_str(), utf8_to_ascii(info->description).c_str());
         fprintf(stderr, "    Models: ");
@@ -325,7 +324,7 @@ void* load(void* args) {
 #else
         FILE* fp = fopen(imagepath.c_str(), "rb");
 #endif
-        if (!fp) {
+        if (fp == nullptr) {
             continue;
         }
 
@@ -343,17 +342,17 @@ void* load(void* args) {
         if (length > 12 && filedata[0] == 'R' && filedata[8] == 'W') {
             // RIFF____WEBP
             pixeldata = webp_load(filedata.get(), length, &w, &h, &c);
-            if (pixeldata) {
+            if (pixeldata != nullptr) {
                 webp = 1;
             }
         }
-        if (!pixeldata) {
+        if (pixeldata == nullptr) {
             // not webp, try jpg png etc.
 #if _WIN32
             pixeldata = wic_decode_image(imagepath.c_str(), &w, &h, &c);
 #else   // _WIN32
             pixeldata = stbi_load_from_memory(filedata.get(), length, &w, &h, &c, 0);
-            if (pixeldata) {
+            if (pixeldata != nullptr) {
                 // stb_image auto channel
                 if (c == 1) {
                     // grayscale -> rgb
@@ -370,7 +369,7 @@ void* load(void* args) {
 #endif  // _WIN32
         }
 
-        if (!pixeldata) {
+        if (pixeldata == nullptr) {
             ltp->logger_error->error(PATHSTR("Decode failed: {}"), imagepath);
             continue;
         }
@@ -529,8 +528,8 @@ int wmain(int argc, wchar_t** argv)
 int main(int argc, char** argv)
 #endif
 {
-    auto logger_info = spdlog::stdout_color_mt("console");
-    auto logger_error = spdlog::stderr_color_mt("stderr");
+    const auto logger_info = spdlog::stdout_color_mt("console");
+    const auto logger_error = spdlog::stderr_color_mt("stderr");
 
     path_t inputpath;
     path_t outputpath;
@@ -793,7 +792,7 @@ int main(int argc, char** argv)
     }
 
     const auto* engine_info = SuperResolutionEngineFactory::get_engine_info(ascii_to_utf8(engine_name));
-    if (!engine_info) {
+    if (engine_info == nullptr) {
         logger_error->error("Unknown engine: '{}'", engine_name);
         return -1;
     }
@@ -861,6 +860,8 @@ int main(int argc, char** argv)
                 .noise = noise,
                 .sync_gap = sync_gap,
 
+                .engine_name = ascii_to_utf8(engine_name),
+
                 .logger_error = logger_error,
             };
 
@@ -870,7 +871,7 @@ int main(int argc, char** argv)
             logger_info->info("Creating {} instance for gpu_id={}, model={}, model_dir={}", engine_name, config.gpu_id, config.model, config.model_dir.string());
 #endif
 
-            auto engine = SuperResolutionEngineFactory::create_engine(ascii_to_utf8(engine_name), config);
+            auto engine = SuperResolutionEngineFactory::create_engine(config);
 
             // Check if the instance was created successfully
             if (engine == nullptr) {

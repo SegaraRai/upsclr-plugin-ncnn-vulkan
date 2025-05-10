@@ -36,7 +36,7 @@ BicubicLayers::BicubicLayers(ncnn::VulkanDevice* _vkdev, const ncnn::Option& _op
 }
 
 std::shared_ptr<ncnn::Layer> BicubicLayers::get_bicubic(int scale) const {
-    auto it = this->bicubics.find(scale);
+    const auto it = this->bicubics.find(scale);
     if (it != this->bicubics.end()) {
         return it->second;
     }
@@ -64,13 +64,13 @@ PipelineCache::PipelineCache(std::function<std::shared_ptr<SuperResolutionPipeli
 }
 
 std::shared_ptr<SuperResolutionPipelines> PipelineCache::get_pipelines(int scale) const {
-    auto it = this->pipelines.find(scale);
+    const auto it = this->pipelines.find(scale);
     if (it != this->pipelines.end()) {
         return it->second;
     }
 
     // Create new pipelines
-    auto result = this->pipelines.emplace(scale, this->pipeline_factory(scale));
+    const auto result = this->pipelines.emplace(scale, this->pipeline_factory(scale));
     return result.first->second;
 }
 
@@ -87,13 +87,13 @@ NetCache::NetCache(std::function<std::shared_ptr<ncnn::Net>(int)> factory)
 }
 
 std::shared_ptr<ncnn::Net> NetCache::get_net(int scale) const {
-    auto it = this->nets.find(scale);
+    const auto it = this->nets.find(scale);
     if (it != this->nets.end()) {
         return it->second;
     }
 
     // Create new net
-    auto result = this->nets.emplace(scale, this->net_factory(scale));
+    const auto result = this->nets.emplace(scale, this->net_factory(scale));
     return result.first->second;
 }
 
@@ -108,21 +108,20 @@ void NetCache::clear() {
 SuperResolutionEngine::SuperResolutionEngine(const SuperResolutionEngineConfig& _config)
     : config(_config),
       vkdev(config.gpu_id >= 0 ? ncnn::get_gpu_device(config.gpu_id) : nullptr),
-      net_cache([this](int scale) {
+      net_cache([this](int scale) -> std::shared_ptr<ncnn::Net> {
           auto net = this->create_net(scale, this->net_cache);
           if (net == nullptr) {
               this->config.logger_error->error("create_net returned nullptr for scale {}", scale);
-              return std::shared_ptr<ncnn::Net>();
+              return nullptr;
           }
           return net;
       }),
-      pipeline_cache([this](int scale) {
+      pipeline_cache([this](int scale) -> std::shared_ptr<SuperResolutionPipelines> {
           auto pipelines = this->create_pipelines(scale, this->pipeline_cache);
           if (pipelines == nullptr) {
               this->config.logger_error->error("create_pipelines returned nullptr for scale {}", scale);
-              return std::shared_ptr<SuperResolutionPipelines>();
+              return nullptr;
           }
-
           return pipelines;
       }),
       bicubic_layers(this->vkdev, ([this]() {
@@ -173,7 +172,7 @@ int SuperResolutionEngine::preload(int scale) const {
 
     // Get pipelines for the current scale
     const auto ptr_pipelines = pipeline_cache.get_pipelines(scale);
-    if (!ptr_pipelines) {
+    if (ptr_pipelines == nullptr) {
         this->config.logger_error->error("[{}] Failed to get pipelines for scale {}", __func__, scale);
         return -1;
     }

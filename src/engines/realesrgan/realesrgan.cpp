@@ -281,7 +281,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
 
     // Get pipelines for the current scale
     const auto ptr_pipelines = pipeline_cache.get_pipelines(scale);
-    if (!ptr_pipelines) {
+    if (ptr_pipelines == nullptr) {
         this->config.logger_error->error("[{}] Failed to get pipelines for scale {}", __func__, scale);
         return -1;
     }

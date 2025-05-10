@@ -36,11 +36,10 @@
 #include "../engines/engine_factory.hpp"
 
 template <>
-struct glz::meta<std::u8string>
-{
-   static constexpr auto read_x = [](std::u8string& s, const std::string& input) { s = as_utf8(input); };
-   static constexpr auto write_x = [](const std::u8string& s) -> std::string { return as_string(s); };
-   static constexpr auto value = glz::custom<read_x, write_x>;
+struct glz::meta<std::u8string> {
+    static constexpr auto read_x = [](std::u8string& s, const std::string& input) { s = as_utf8(input); };
+    static constexpr auto write_x = [](const std::u8string& s) -> std::string { return as_string(s); };
+    static constexpr auto value = glz::custom<read_x, write_x>;
 };
 
 struct EngineConfigEx : public SuperResolutionEngineConfig {
@@ -139,11 +138,23 @@ ColorFormat convert_color_format(UpsclrColorFormat format) {
 // Base class for engine adapters
 class EngineAdapter {
    protected:
-    static void push_glaze_errors(std::vector<std::u8string>& errors, const glz::error_ctx& error_ctx, std::string_view json_sv) {
-        errors.push_back(ascii_to_utf8(glz::format_error(error_ctx, json_sv)));
-        if (!error_ctx.custom_error_message.empty()) {
-            errors.push_back(ascii_to_utf8(error_ctx.custom_error_message));
+    template <typename T>
+    static std::optional<T> parse_json_config(const char8_t* config_json, size_t config_json_length, std::vector<std::u8string>& errors) {
+        if (config_json == nullptr || config_json_length == 0) {
+            errors.push_back(u8"Empty configuration");
+            return std::nullopt;
         }
+
+        const std::string_view json_sv(reinterpret_cast<const char*>(config_json), config_json_length);
+
+        T config;
+        const auto error_ctx = glz::read<glz::opts{.null_terminated = false, .error_on_unknown_keys = false}>(config, json_sv);
+        if (error_ctx) {
+            errors.push_back(ascii_to_utf8(glz::format_error(error_ctx, json_sv)));
+            return std::nullopt;
+        }
+
+        return config;
     }
 
     void push_common_engine_config_errors(std::vector<std::u8string>& errors, const EngineConfigEx& config) const {
@@ -212,7 +223,7 @@ class EngineAdapter {
     // Create engine instance
     virtual std::unique_ptr<SuperResolutionEngine> create_engine(const EngineConfigEx& engine_config, std::vector<std::u8string>& errors) const {
         try {
-            return SuperResolutionEngineFactory::create_engine(this->engine_name, engine_config);
+            return SuperResolutionEngineFactory::create_engine(engine_config);
         } catch (const std::exception& e) {
             errors.push_back(ascii_to_utf8(std::format("Failed to create engine: {}", e.what())));
             return nullptr;
@@ -277,31 +288,23 @@ class RealESRGANAdapter final : public EngineAdapter {
     }
 
     std::optional<EngineConfigEx> parse_config(const char8_t* config_json, size_t config_json_length, std::vector<std::u8string>& errors) const override {
-        if (config_json == nullptr || config_json_length == 0) {
-            errors.push_back(u8"Empty configuration");
+        const auto parsed_config = EngineAdapter::parse_json_config<Config>(config_json, config_json_length, errors);
+        if (!parsed_config.has_value()) {
             return std::nullopt;
         }
 
-        const std::string_view json_sv(reinterpret_cast<const char*>(config_json), config_json_length);
-
-        Config config;
-        auto error_ctx = glz::read<glz::opts{.null_terminated = false, .error_on_unknown_keys = false}>(config, json_sv);
-        if (error_ctx) {
-            EngineAdapter::push_glaze_errors(errors, error_ctx, json_sv);
-            return std::nullopt;
-        }
-
-        EngineConfigEx engine_config;
-        engine_config.engine_name = this->engine_name;
-        engine_config.gpu_id = config.gpu_id;
-        engine_config.tta_mode = config.tta_mode;
-        engine_config.num_threads = config.num_threads;
-        engine_config.model = config.model;
-        engine_config.model_dir = std::filesystem::u8path(config.model_dir);
-
-        engine_config.tile_size = config.tile_size;
-
-        return engine_config;
+        const auto& config = parsed_config.value();
+        return EngineConfigEx{
+            {
+                .model_dir = std::filesystem::u8path(config.model_dir),
+                .model = config.model,
+                .gpu_id = config.gpu_id,
+                .tta_mode = config.tta_mode,
+                .num_threads = config.num_threads,
+                .engine_name = this->engine_name,
+            },
+            config.tile_size,
+        };
     }
 };
 
@@ -373,33 +376,25 @@ class RealCUGANAdapter final : public EngineAdapter {
     }
 
     std::optional<EngineConfigEx> parse_config(const char8_t* config_json, size_t config_json_length, std::vector<std::u8string>& errors) const override {
-        if (config_json == nullptr || config_json_length == 0) {
-            errors.push_back(u8"Empty configuration");
+        const auto parsed_config = EngineAdapter::parse_json_config<Config>(config_json, config_json_length, errors);
+        if (!parsed_config.has_value()) {
             return std::nullopt;
         }
 
-        const std::string_view json_sv(reinterpret_cast<const char*>(config_json), config_json_length);
-
-        Config config;
-        auto error_ctx = glz::read<glz::opts{.null_terminated = false, .error_on_unknown_keys = false}>(config, json_sv);
-        if (error_ctx) {
-            push_glaze_errors(errors, error_ctx, json_sv);
-            return std::nullopt;
-        }
-
-        EngineConfigEx engine_config;
-        engine_config.engine_name = this->engine_name;
-        engine_config.gpu_id = config.gpu_id;
-        engine_config.tta_mode = config.tta_mode;
-        engine_config.num_threads = config.num_threads;
-        engine_config.model = config.model;
-        engine_config.model_dir = std::filesystem::u8path(config.model_dir);
-        engine_config.noise = config.noise;
-        engine_config.sync_gap = config.sync_gap;
-
-        engine_config.tile_size = config.tile_size;
-
-        return engine_config;
+        const auto& config = parsed_config.value();
+        return EngineConfigEx{
+            {
+                .model_dir = std::filesystem::u8path(config.model_dir),
+                .model = config.model,
+                .gpu_id = config.gpu_id,
+                .tta_mode = config.tta_mode,
+                .num_threads = config.num_threads,
+                .noise = config.noise,
+                .sync_gap = config.sync_gap,
+                .engine_name = this->engine_name,
+            },
+            config.tile_size,
+        };
     }
 
     void validate_config_extra(const EngineConfigEx& engine_config, std::vector<std::u8string>& errors, std::vector<std::u8string>& warnings) const override {
@@ -433,7 +428,7 @@ class EngineAdapterRegistry final {
     }
 
     void register_adapter(std::unique_ptr<EngineAdapter>&& adapter) {
-        if (!adapter) {
+        if (adapter == nullptr) {
             return;
         }
 
@@ -475,7 +470,7 @@ void initialize_all() {
 
     const auto& registry = EngineAdapterRegistry::instance();
     for (const auto& name : registry.get_adapter_names()) {
-        const auto* adapter = registry.get_adapter(name);
+        const auto adapter = registry.get_adapter(name);
         if (adapter == nullptr) {
             continue;
         }
@@ -525,8 +520,8 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_conf
     std::lock_guard lk(g_mutex);
 
     const auto& registry = EngineAdapterRegistry::instance();
-    const auto* adapter = registry.get_adapter(engine_index);
-    if (!adapter) {
+    const auto adapter = registry.get_adapter(engine_index);
+    if (adapter == nullptr) {
         return nullptr;
     }
 
@@ -605,10 +600,10 @@ UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
     size_t config_json_length) {
     std::lock_guard lk(g_mutex);
 
-    auto logger_error = spdlog::stderr_color_mt("stderr");
+    const auto logger_error = spdlog::stderr_color_mt("stderr");
 
     const auto& registry = EngineAdapterRegistry::instance();
-    const auto* adapter = registry.get_adapter(engine_index);
+    const auto adapter = registry.get_adapter(engine_index);
     if (adapter == nullptr) {
         logger_error->error("[{}] adapter is nullptr", __func__);
         return nullptr;
@@ -640,7 +635,7 @@ UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
     instance->engine = std::move(engine);
     instance->engine_config = engine_config;
 
-    const auto ptr_instance = instance.get();
+    auto* ptr_instance = instance.get();
     g_engine_instance_map.emplace(ptr_instance, std::move(instance));
 
     return ptr_instance;

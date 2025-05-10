@@ -224,7 +224,7 @@ class RealCUGANSyncGapGPU {
         const std::vector<std::string>& out_names_or_final,  // "out0" for stage2, gap names for stage0
         std::optional<Stage2Options> stage2_options          // Options for stage2 processing
     ) {
-        const auto ptr_stage2_options = stage2_options.has_value() ? &stage2_options.value() : nullptr;
+        const auto* ptr_stage2_options = stage2_options.has_value() ? &stage2_options.value() : nullptr;
 
         const int w = in.w;
         const int h = in.h;
@@ -1182,7 +1182,7 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
 
     // Get pipelines for the current scale
     const auto ptr_pipelines = pipeline_cache.get_pipelines(scale);
-    if (!ptr_pipelines) {
+    if (ptr_pipelines == nullptr) {
         this->config.logger_error->error("[{}] Failed to get pipelines for scale {}", __func__, scale);
         return -1;
     }
@@ -1394,7 +1394,7 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
 
     // Get pipelines for the current scale
     const auto ptr_pipelines = this->pipeline_cache.get_pipelines(config.scale);
-    if (!ptr_pipelines) {
+    if (ptr_pipelines == nullptr) {
         this->config.logger_error->error("[{}] Failed to get pipelines for scale {}", __func__, config.scale);
         return nullptr;
     }
@@ -1433,7 +1433,7 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
 
 int RealCUGAN::process_gpu_se(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
     const auto sg = this->create_sync_gap_gpu(in, in_format, config);
-    if (!sg) {
+    if (sg == nullptr) {
         this->config.logger_error->error("[{}] Failed to create GPU sync gap processor", __func__);
         return -1;
     }
@@ -1470,7 +1470,7 @@ int RealCUGAN::process_gpu_se(const ncnn::Mat& in, ColorFormat in_format, ncnn::
 
 int RealCUGAN::process_gpu_se_rough(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
     const auto sg = this->create_sync_gap_gpu(in, in_format, config);
-    if (!sg) {
+    if (sg == nullptr) {
         this->config.logger_error->error("[{}] Failed to create GPU sync gap processor", __func__);
         return -1;
     }
@@ -1489,7 +1489,7 @@ int RealCUGAN::process_gpu_se_rough(const ncnn::Mat& in, ColorFormat in_format, 
 
 int RealCUGAN::process_gpu_se_very_rough(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
     const auto sg = this->create_sync_gap_gpu(in, in_format, config);
-    if (!sg) {
+    if (sg == nullptr) {
         this->config.logger_error->error("[{}] Failed to create GPU sync gap processor", __func__);
         return -1;
     }
