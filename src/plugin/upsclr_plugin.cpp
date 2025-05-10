@@ -30,9 +30,9 @@
 #    include <Windows.h>
 #endif
 
-// Include engine headers
+#include "../encoding_utils.hpp"
+
 #include "../engines/base.hpp"
-#include "../engines/encoding_utils.hpp"
 #include "../engines/engine_factory.hpp"
 
 template <>

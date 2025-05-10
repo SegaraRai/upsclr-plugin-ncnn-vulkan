@@ -119,7 +119,7 @@ target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE UPSCLR_EXPORTS)
 
 # Add the executable target
 add_executable(upsclr-ncnn-vulkan
-    src/main.cpp
+    src/bin/main.cpp
     src/engines/base.cpp
     src/engines/engine_factory.cpp
     src/engines/realesrgan/realesrgan.cpp
@@ -127,7 +127,7 @@ add_executable(upsclr-ncnn-vulkan
 )
 
 add_executable(upsclr-ncnn-vulkan-2
-    src/main2.cpp
+    src/bin/main2.cpp
 )
 
 find_package(cxxopts CONFIG REQUIRED)
@@ -142,8 +142,8 @@ if(WIN32)
     target_compile_definitions(upsclr-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
     target_compile_definitions(upsclr-ncnn-vulkan-2 PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
 
-    target_sources(upsclr-ncnn-vulkan PRIVATE src/win_utf8.cpp)
-    target_sources(upsclr-ncnn-vulkan-2 PRIVATE src/win_utf8.cpp)
+    target_sources(upsclr-ncnn-vulkan PRIVATE src/bin/win_utf8.cpp)
+    target_sources(upsclr-ncnn-vulkan-2 PRIVATE src/bin/win_utf8.cpp)
 endif()
 
 find_package(Vulkan REQUIRED)

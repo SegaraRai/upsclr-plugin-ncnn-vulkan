@@ -1,8 +1,3 @@
-/**
- * @file main2.cpp
- * @brief Alternative implementation of main.cpp using upsclr-plugin-ncnn-vulkan.dll
- */
-
 #include <algorithm>
 #include <chrono>
 #include <clocale>
@@ -28,10 +23,8 @@
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
 
-#include "engines/encoding_utils.hpp"
-
-// Plugin API
-#include "plugin/upsclr_plugin.h"
+#include "../encoding_utils.hpp"
+#include "../plugin/upsclr_plugin.h"
 
 // Image processing
 #if _WIN32

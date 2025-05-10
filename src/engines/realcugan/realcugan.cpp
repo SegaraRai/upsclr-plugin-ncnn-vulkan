@@ -1,6 +1,6 @@
 #include "realcugan.hpp"
 
-#include "../encoding_utils.hpp"
+#include "../../encoding_utils.hpp"
 
 #include "ncnn/cpu.h"
 

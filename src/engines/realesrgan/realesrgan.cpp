@@ -1,6 +1,6 @@
 #include "realesrgan.hpp"
 
-#include "../encoding_utils.hpp"
+#include "../../encoding_utils.hpp"
 
 #include <algorithm>
 #include <cstdint>

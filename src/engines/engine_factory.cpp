@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-#include "encoding_utils.hpp"
+#include "../encoding_utils.hpp"
 
 // Include all engine headers
 #include "realcugan/realcugan.hpp"

@@ -22,8 +22,8 @@
 #include "gpu.h"
 #include "platform.h"
 
-#include "engines/encoding_utils.hpp"
-#include "engines/engine_factory.hpp"
+#include "../encoding_utils.hpp"
+#include "../engines/engine_factory.hpp"
 
 namespace fs = std::filesystem;
 
