@@ -6,32 +6,30 @@
 #include <filesystem>
 #include <format>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <ranges>
+#include <regex>
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
+// Third-party libraries
+#include "cxxopts.hpp"
+#include "glaze/glaze.hpp"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
 
-// ncnn
-#include "cpu.h"
-#include "gpu.h"
-#include "platform.h"
-
 #include "../encoding_utils.hpp"
-#include "../engines/engine_factory.hpp"
+#include "../plugin/upsclr_plugin.h"
 
-namespace fs = std::filesystem;
-
+// Image processing
 #if _WIN32
-// image decoder and encoder with wic
 #    include "wic_image.h"
-#else  // _WIN32
-// image decoder and encoder with stb
+#else
 #    define STB_IMAGE_IMPLEMENTATION
 #    define STBI_NO_PSD
 #    define STBI_NO_TGA
@@ -42,635 +40,648 @@ namespace fs = std::filesystem;
 #    include "stb_image.h"
 #    define STB_IMAGE_WRITE_IMPLEMENTATION
 #    include "stb_image_write.h"
-#endif  // _WIN32
-#include "webp_image.h"
-
-#if _WIN32
-#    include <wchar.h>
-static wchar_t* optarg = NULL;
-static int optind = 1;
-static wchar_t getopt(int argc, wchar_t* const argv[], const wchar_t* optstring) {
-    if (optind >= argc || argv[optind][0] != L'-') {
-        return -1;
-    }
-
-    wchar_t opt = argv[optind][1];
-    const wchar_t* p = wcschr(optstring, opt);
-    if (p == nullptr) {
-        return L'?';
-    }
-
-    optarg = nullptr;
-
-    if (p[1] == L':') {
-        optind++;
-        if (optind >= argc) {
-            return L'?';
-        }
-
-        optarg = argv[optind];
-    }
-
-    optind++;
-
-    return opt;
-}
-
-static std::vector<int> parse_optarg_int_array(const wchar_t* optarg) {
-    std::vector<int> array;
-    array.push_back(_wtoi(optarg));
-
-    const wchar_t* p = wcschr(optarg, L',');
-    while (p) {
-        p++;
-        array.push_back(_wtoi(p));
-        p = wcschr(p, L',');
-    }
-
-    return array;
-}
-#else                    // _WIN32
-#    include <unistd.h>  // getopt()
-
-static std::vector<int> parse_optarg_int_array(const char* optarg) {
-    std::vector<int> array;
-    array.push_back(atoi(optarg));
-
-    const char* p = strchr(optarg, ',');
-    while (p) {
-        p++;
-        array.push_back(atoi(p));
-        p = strchr(p, ',');
-    }
-
-    return array;
-}
-#endif                   // _WIN32
-
-#if _WIN32
-using path_t = std::wstring;
-#    define PATHSTR(X) L##X
-#else
-using path_t = std::string;
-#    define PATHSTR(X) X
 #endif
+#include "webp_image.h"
 
 namespace {
 
-#if _WIN32
-std::wstring tow(std::string_view ascii_str) {
-    return std::wstring(ascii_str.begin(), ascii_str.end());
-}
+constexpr int DEFAULT_GPU_DEVICE_ID_PLACEHOLDER = -999;
+constexpr int MAX_QUEUE_SIZE = 8;
 
-std::wstring tow(std::u8string_view ascii_str) {
-    return std::wstring(ascii_str.begin(), ascii_str.end());
-}
-#endif
-
-path_t get_file_extension(const path_t& path) {
 #if _WIN32
-    return fs::path(path).extension().wstring();
+#    define PATHSTR(X) L##X
+
+std::wstring p2s(const std::filesystem::path& path) {
+    return path.wstring();
+}
 #else
-    return fs::path(path).extension().string();
+#    define PATHSTR(X) X
+
+std::string p2s(const std::filesystem::path& path) {
+    return path.string();
+}
 #endif
-}
 
-path_t get_file_name_without_extension(const path_t& path) {
-#if _WIN32
-    return fs::path(path).stem().wstring();
-#else
-    return fs::path(path).stem().string();
-#endif
-}
-
-bool path_is_directory(const path_t& path) {
-    return fs::is_directory(fs::path(path));
-}
-
-int list_directory(const path_t& dirpath, std::vector<path_t>& imagepaths) {
-    imagepaths.clear();
+int list_directory(const std::filesystem::path& dir, std::vector<std::filesystem::path>& filepaths) {
+    filepaths.clear();
 
     try {
-        for (const auto& entry : fs::directory_iterator(fs::path(dirpath))) {
+        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
             if (entry.is_regular_file()) {
-                imagepaths.push_back(entry.path().filename().string<path_t::value_type, std::char_traits<path_t::value_type>, std::allocator<path_t::value_type>>());
+                filepaths.push_back(entry.path().filename());
             }
         }
-        std::ranges::sort(imagepaths);
+        std::ranges::sort(filepaths);
         return 0;
-    } catch (const fs::filesystem_error& e) {
+    } catch (const std::filesystem::filesystem_error& e) {
 #if _WIN32
-        fwprintf(stderr, L"opendir failed %ls: %hs\n", dirpath.c_str(), e.what());
+        fwprintf(stderr, L"opendir failed %ls: %hs\n", dir.wstring().c_str(), e.what());
 #else
-        fprintf(stderr, "opendir failed %s: %s\n", dirpath.c_str(), e.what());
+        fprintf(stderr, "opendir failed %s: %s\n", dir.string().c_str(), e.what());
 #endif
         return -1;
     }
 }
 
-path_t get_executable_directory() {
-#if _WIN32
-    return fs::path(fs::current_path()).wstring();
-#else
-    return fs::path(fs::current_path()).string();
-#endif
-}
+// Structure to store image data
+struct ImageData final {
+    int w = 0;
+    int h = 0;
+    int c = 0;
+    void* data = nullptr;
+    UpsclrColorFormat color_format = UPSCLR_COLOR_FORMAT_RGB;
+};
 
-bool filepath_is_readable(const path_t& path) {
-    try {
-        return fs::exists(fs::path(path)) && fs::is_regular_file(fs::path(path));
-    } catch (const fs::filesystem_error&) {
-        return false;
+// Class to manage plugin instance
+class PluginManager final {
+    std::unique_ptr<UpsclrEngineInstance, std::function<void(UpsclrEngineInstance*)>> instance;
+    size_t engine_index;
+    std::u8string config_json;
+    std::shared_ptr<spdlog::logger> logger_info;
+    std::shared_ptr<spdlog::logger> logger_error;
+
+   public:
+    PluginManager(size_t engine_idx, const std::u8string& config, std::shared_ptr<spdlog::logger> info_logger, std::shared_ptr<spdlog::logger> error_logger)
+        : instance(nullptr), engine_index(engine_idx), config_json(config), logger_info(info_logger), logger_error(error_logger) {
+        instance = std::unique_ptr<UpsclrEngineInstance, std::function<void(UpsclrEngineInstance*)>>(
+            upsclr_plugin_create_engine_instance(
+                engine_idx,
+                config_json.data(),
+                config_json.length()),
+            [](UpsclrEngineInstance* instance) {
+                if (instance == nullptr) {
+                    return;
+                }
+
+                upsclr_plugin_destroy_engine_instance(instance);
+            });
+
+        if (instance == nullptr) {
+            logger_error->error("Failed to create engine instance (engine index {})", engine_idx);
+        }
     }
-}
 
-path_t sanitize_filepath(const path_t& path) {
-    if (filepath_is_readable(path)) {
-        return path;
+    ~PluginManager() = default;
+
+    UpsclrErrorCode preload(int scale) {
+        if (instance == nullptr) {
+            return UPSCLR_ERROR_ENGINE_NOT_FOUND;
+        }
+
+        return upsclr_preload_upscale(instance.get(), scale);
     }
 
-    return get_executable_directory() + path;
-}
+    UpsclrErrorCode process(void* in_data, int in_width, int in_height, int in_channels, void* out_data, int out_width, int out_height, int out_channels, int scale, UpsclrColorFormat in_format, UpsclrColorFormat out_format) {
+        if (instance == nullptr) {
+            return UPSCLR_ERROR_ENGINE_NOT_FOUND;
+        }
 
-void print_usage() {
-    fprintf(stderr, "Usage: realesrgan-ncnn-vulkan -i infile -o outfile [options]...\n\n");
-    fprintf(stderr, "  -h                   show this help\n");
-    fprintf(stderr, "  -i input-path        input image path (jpg/png/webp) or directory\n");
-    fprintf(stderr, "  -o output-path       output image path (jpg/png/webp) or directory\n");
-    fprintf(stderr, "  -s scale             upscale ratio (can be 2, 3, 4. default=4)\n");
-    fprintf(stderr, "  -t tile-size         tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
-    fprintf(stderr, "  -m model-path        folder path to the pre-trained models. default=models\n");
-    fprintf(stderr, "  -n model-name        model name (default depends on engine)\n");
-    fprintf(stderr, "  -e engine            engine to use (realesrgan, realcugan, default=realesrgan)\n");
-    fprintf(stderr, "  -g gpu-id            gpu device to use (default=auto) can be 0,1,2 for multi-gpu\n");
-    fprintf(stderr, "  -j load:proc:save    thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
-    fprintf(stderr, "  -x                   enable tta mode\n");
-    fprintf(stderr, "  -f format            output image format (jpg/png/webp, default=ext/png)\n");
-    fprintf(stderr, "  -v                   verbose output\n");
-    fprintf(stderr, "  -y noise             noise level (-1/0/1/2/3, default=0, only for realcugan)\n");
-    fprintf(stderr, "  -z sync-gap          sync gap mode (0/1/2/3, default=0, only for realcugan)\n");
+        return upsclr_upscale(
+            instance.get(),
+            scale,
+            static_cast<const unsigned char*>(in_data),
+            in_width * in_height * in_channels,
+            in_width,
+            in_height,
+            in_channels,
+            in_format,
+            static_cast<unsigned char*>(out_data),
+            out_width * out_height * out_channels,
+            out_format);
+    }
 
-    // Print available engines
-    fprintf(stderr, "\nAvailable engines:\n");
-    for (const auto& engine : SuperResolutionEngineFactory::get_available_engines()) {
-        const auto* info = SuperResolutionEngineFactory::get_engine_info(engine);
-        fprintf(stderr, "  %s: %s\n", utf8_to_ascii(engine).c_str(), utf8_to_ascii(info->description).c_str());
-        fprintf(stderr, "    Models: ");
-        for (size_t i = 0; i < info->model_names.size(); ++i) {
-            fprintf(stderr, "%s", utf8_to_ascii(info->model_names[i]).c_str());
-            if (i < info->model_names.size() - 1) {
-                fprintf(stderr, ", ");
+    static void print_available_engines() {
+        const size_t engine_count = upsclr_plugin_count_engines();
+
+        fprintf(stderr, "\nAvailable engines:\n");
+        for (size_t i = 0; i < engine_count; ++i) {
+            const auto* info = upsclr_plugin_get_engine_info(i);
+            if (info == nullptr) {
+                continue;
+            }
+
+            fprintf(stderr, "  %s: %s\n", utf8_to_ascii(info->name).c_str(), utf8_to_ascii(info->description).c_str());
+
+            // Parse JSON schema to extract model names
+            fprintf(stderr, "    Models: ");
+
+            // This is a simplified approach - in a real implementation,
+            // you would parse the JSON schema properly
+            std::u8string schema(info->config_json_schema);
+            size_t model_pos = schema.find(u8"\"model\"");
+            size_t enum_pos = schema.find(u8"\"enumeration\"", model_pos);
+
+            if (model_pos != std::u8string::npos && enum_pos != std::u8string::npos) {
+                size_t start = schema.find(u8'[', enum_pos);
+                size_t end = schema.find(u8']', start);
+
+                if (start != std::u8string::npos && end != std::u8string::npos) {
+                    std::string models = utf8_to_ascii(schema.substr(start + 1, end - start - 1));
+                    // Very simple parsing - would need improvement for real use
+                    models = std::regex_replace(models, std::regex("\""), "");
+                    models = std::regex_replace(models, std::regex(","), ", ");
+                    fprintf(stderr, "%s", models.c_str());
+                }
+            }
+
+            fprintf(stderr, "\n\n");
+        }
+    }
+
+    static size_t find_engine_by_name(const std::u8string& name) {
+        const size_t engine_count = upsclr_plugin_count_engines();
+
+        for (size_t i = 0; i < engine_count; ++i) {
+            const auto* info = upsclr_plugin_get_engine_info(i);
+            if (info == nullptr) {
+                continue;
+            }
+
+            if (name == info->name) {
+                return i;
             }
         }
-        fprintf(stderr, "\n");
-        fprintf(stderr, "    Default model: %s\n", utf8_to_ascii(info->default_model).c_str());
-        if (info->supports(SuperResolutionFeatureFlags::NOISE)) {
-            fprintf(stderr, "    Default noise: %d\n", info->default_noise);
-        }
-        fprintf(stderr, "\n");
+
+        return static_cast<size_t>(-1);
     }
+};
+
+// Function to generate engine configuration JSON
+std::u8string generate_engine_config(const std::u8string& engine_name,
+                                     const std::u8string& model_dir,
+                                     const std::u8string& model_name,
+                                     int gpu_id,
+                                     int tile_size,
+                                     bool tta_mode,
+                                     int noise = 0,
+                                     int sync_gap = 0) {
+    std::map<std::string, std::variant<std::string, int, bool>> data;
+
+    if (gpu_id != DEFAULT_GPU_DEVICE_ID_PLACEHOLDER) {
+        data["gpu_id"] = gpu_id;
+    }
+
+    if (tile_size > 0) {
+        data["tile_size"] = tile_size;
+    }
+
+    data["tta_mode"] = tta_mode;
+
+    if (engine_name == u8"realcugan") {
+        data["noise"] = noise;
+        data["sync_gap"] = sync_gap;
+    }
+
+    data["model_dir"] = as_string(model_dir);
+
+    if (model_name != u8"") {
+        data["model"] = as_string(model_name);
+    }
+
+    return as_utf8(glz::write_json(data).value_or("{}"));
 }
 
-class Task {
-   public:
+struct Task final {
     int id;
     int webp;
 
     std::chrono::microseconds elapsed;
 
-    path_t inpath;
-    path_t outpath;
+    std::filesystem::path in_path;
+    std::filesystem::path out_path;
 
-    ncnn::Mat inimage;
-    ncnn::Mat outimage;
+    ImageData in_image;
+    ImageData out_image;
 
-    ProcessConfig config;
+    int scale;
 };
 
-class TaskQueue {
+class TaskQueue final {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::queue<Task> tasks;
+
    public:
     TaskQueue() = default;
 
     void put(const Task& v) {
         std::unique_lock lock(mutex);
 
-        while (tasks.size() >= 8)  // FIXME hardcode queue length
-        {
-            cv.wait(lock);
-        }
+        cv.wait(lock, [&] {
+            return tasks.size() < MAX_QUEUE_SIZE;
+        });
 
         tasks.push(v);
 
-        lock.unlock();
-
-        cv.notify_one();
+        cv.notify_all();
     }
 
     void get(Task& v) {
         std::unique_lock lock(mutex);
 
-        while (tasks.size() == 0) {
-            cv.wait(lock);
-        }
+        cv.wait(lock, [&] {
+            return tasks.size() > 0;
+        });
 
         v = tasks.front();
         tasks.pop();
 
-        lock.unlock();
-
-        cv.notify_one();
+        cv.notify_all();
     }
-
-   private:
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::queue<Task> tasks;
 };
 
-TaskQueue toproc;
-TaskQueue tosave;
+TaskQueue to_proc_queue;
+TaskQueue to_save_queue;
 
-class LoadThreadParams {
-   public:
+struct LoadThreadParams final {
     int scale;
     int jobs_load;
 
     // session data
-    std::vector<path_t> input_files;
-    std::vector<path_t> output_files;
+    std::vector<std::filesystem::path> input_files;
+    std::vector<std::filesystem::path> output_files;
 
     std::shared_ptr<spdlog::logger> logger_info;
     std::shared_ptr<spdlog::logger> logger_error;
 };
 
-void* load(void* args) {
-    const LoadThreadParams* ltp = static_cast<const LoadThreadParams*>(args);
-    const int count = ltp->input_files.size();
-    const int scale = ltp->scale;
+void load(const LoadThreadParams& ltp) {
+    const int count = static_cast<int>(ltp.input_files.size());
+    const int scale = ltp.scale;
 
-#pragma omp parallel for schedule(static, 1) num_threads(ltp->jobs_load)
+#pragma omp parallel for schedule(static, 1) num_threads(ltp.jobs_load)
     for (int i = 0; i < count; i++) {
-        const path_t& imagepath = ltp->input_files[i];
-
+        const auto& image_path = ltp.input_files[i];
         int webp = 0;
 
-        unsigned char* pixeldata = nullptr;
+        unsigned char* in_image_data = nullptr;
         int w;
         int h;
         int c;
 
 #if _WIN32
-        FILE* fp = _wfopen(imagepath.c_str(), L"rb");
+        FILE* fp = _wfopen(image_path.wstring().c_str(), L"rb");
 #else
-        FILE* fp = fopen(imagepath.c_str(), "rb");
+        FILE* fp = fopen(image_path.string().c_str(), "rb");
 #endif
         if (fp == nullptr) {
             continue;
         }
 
         // read whole file
-        std::unique_ptr<unsigned char[]> filedata;
+        std::unique_ptr<unsigned char[]> file_data;
         int length = 0;
         fseek(fp, 0, SEEK_END);
         length = ftell(fp);
         rewind(fp);
-        filedata = std::make_unique<unsigned char[]>(length);
-        fread(filedata.get(), 1, length, fp);
+        file_data = std::make_unique<unsigned char[]>(length);
+        fread(file_data.get(), 1, length, fp);
         fclose(fp);
 
         // decode image
-        if (length > 12 && filedata[0] == 'R' && filedata[8] == 'W') {
+        if (length > 12 && file_data[0] == 'R' && file_data[8] == 'W') {
             // RIFF____WEBP
-            pixeldata = webp_load(filedata.get(), length, &w, &h, &c);
-            if (pixeldata != nullptr) {
+            in_image_data = webp_load(file_data.get(), length, &w, &h, &c);
+            if (in_image_data != nullptr) {
                 webp = 1;
             }
         }
-        if (pixeldata == nullptr) {
+        if (in_image_data == nullptr) {
             // not webp, try jpg png etc.
 #if _WIN32
-            pixeldata = wic_decode_image(imagepath.c_str(), &w, &h, &c);
+            in_image_data = wic_decode_image(image_path.wstring().c_str(), &w, &h, &c);
 #else   // _WIN32
-            pixeldata = stbi_load_from_memory(filedata.get(), length, &w, &h, &c, 0);
-            if (pixeldata != nullptr) {
+            in_image_data = stbi_load_from_memory(file_data.get(), length, &w, &h, &c, 0);
+            if (in_image_data != nullptr) {
                 // stb_image auto channel
                 if (c == 1) {
                     // grayscale -> rgb
-                    stbi_image_free(pixeldata);
-                    pixeldata = stbi_load_from_memory(filedata.get(), length, &w, &h, &c, 3);
+                    stbi_image_free(in_image_data);
+                    in_image_data = stbi_load_from_memory(file_data.get(), length, &w, &h, &c, 3);
                     c = 3;
                 } else if (c == 2) {
                     // grayscale + alpha -> rgba
-                    stbi_image_free(pixeldata);
-                    pixeldata = stbi_load_from_memory(filedata.get(), length, &w, &h, &c, 4);
+                    stbi_image_free(in_image_data);
+                    in_image_data = stbi_load_from_memory(file_data.get(), length, &w, &h, &c, 4);
                     c = 4;
                 }
             }
 #endif  // _WIN32
         }
 
-        if (pixeldata == nullptr) {
-            ltp->logger_error->error(PATHSTR("Decode failed: {}"), imagepath);
+        if (in_image_data == nullptr) {
+            ltp.logger_error->error(PATHSTR("Decode failed: {}"), p2s(image_path));
             continue;
         }
 
         Task v;
         v.id = i;
-        v.inpath = imagepath;
-        v.outpath = ltp->output_files[i];
+        v.in_path = image_path;
+        v.out_path = ltp.output_files[i];
+        v.webp = webp;
 
-        v.inimage = ncnn::Mat(w, h, static_cast<void*>(pixeldata), (size_t)c, c);
-        v.outimage = ncnn::Mat(w * scale, h * scale, (size_t)c, c);
+        // Store image data
+        v.in_image.w = w;
+        v.in_image.h = h;
+        v.in_image.c = c;
+        v.in_image.data = in_image_data;
 
-        v.config = ProcessConfig{
-            .scale = scale,
+        // Allocate memory for output image
+        v.out_image.w = w * scale;
+        v.out_image.h = h * scale;
+        v.out_image.c = c;
+        v.out_image.data = malloc(w * scale * h * scale * c);
+
+        v.scale = scale;
 
 #if _WIN32
-            .input_format = ColorFormat::BGR,
-            .output_format = ColorFormat::BGR,
+        v.in_image.color_format = UPSCLR_COLOR_FORMAT_BGR;
+        v.out_image.color_format = UPSCLR_COLOR_FORMAT_BGR;
 #else
-            .input_format = ColorFormat::RGB,
-            .output_format = ColorFormat::RGB,
+        v.in_image.color_format = UPSCLR_COLOR_FORMAT_RGB;
+        v.out_image.color_format = UPSCLR_COLOR_FORMAT_RGB;
 #endif
 
-            .tile_size = 200,
-        };
-
-        if (const auto ext = get_file_extension(v.outpath); c == 4 && (ext == PATHSTR(".jpg") || ext == PATHSTR(".JPG") || ext == PATHSTR(".jpeg") || ext == PATHSTR(".JPEG"))) {
-            const path_t output_filename2 = ltp->output_files[i] + PATHSTR(".png");
-            v.outpath = output_filename2;
-            ltp->logger_error->warn(PATHSTR("Image {} has alpha channel! {} will output {}"), imagepath, imagepath, output_filename2);
+        if (const auto ext = v.out_path.extension(); c == 4 && (ext == ".jpg" || ext == ".JPG" || ext == ".jpeg" || ext == ".JPEG")) {
+            std::filesystem::path out_path_renamed = ltp.output_files[i];
+            out_path_renamed += ".png";
+            v.out_path = out_path_renamed;
+            ltp.logger_error->warn(PATHSTR("Image {} has alpha channel! {} will output {}"), p2s(image_path), p2s(image_path), p2s(out_path_renamed));
         }
 
-        toproc.put(v);
+        to_proc_queue.put(v);
     }
-
-    return 0;
 }
 
-class ProcThreadParams {
-   public:
-    const SuperResolutionEngine* engine;
+struct ProcThreadParams final {
+    PluginManager* plugin_manager;
     std::atomic<long long>* total_elapsed;
-    ProcessConfig default_config;
 };
 
-void* proc(void* args) {
-    const ProcThreadParams* ptp = static_cast<const ProcThreadParams*>(args);
-    const SuperResolutionEngine* engine = ptp->engine;
-    const auto tile_size = ptp->default_config.tile_size;
+void proc(ProcThreadParams ptp) {
+    const auto plugin_manager = ptp.plugin_manager;
 
     for (;;) {
         Task v;
 
-        toproc.get(v);
+        to_proc_queue.get(v);
 
         if (v.id == -233) {
             break;
         }
 
-        v.config.tile_size = tile_size;
-
         const auto tp_begin = std::chrono::steady_clock::now();
-        engine->process(v.inimage, v.outimage, v.config);
+
+        UpsclrErrorCode result = plugin_manager->process(
+            v.in_image.data, v.in_image.w, v.in_image.h, v.in_image.c,
+            v.out_image.data, v.out_image.w, v.out_image.h, v.out_image.c,
+            v.scale, v.in_image.color_format, v.out_image.color_format);
+
         const auto tp_end = std::chrono::steady_clock::now();
 
         const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(tp_end - tp_begin);
         v.elapsed = elapsed;
-        ptp->total_elapsed->fetch_add(elapsed.count() * 1'000'000 / (v.inimage.w * v.inimage.h));
+        ptp.total_elapsed->fetch_add(elapsed.count() * 1'000'000 / (v.in_image.w * v.in_image.h));
 
-        tosave.put(v);
+        to_save_queue.put(v);
     }
-
-    return 0;
 }
 
-class SaveThreadParams {
-   public:
-    int verbose;
+struct SaveThreadParams final {
+    bool verbose;
 
     std::shared_ptr<spdlog::logger> logger_info;
     std::shared_ptr<spdlog::logger> logger_error;
 };
 
-void* save(void* args) {
-    const SaveThreadParams* stp = static_cast<const SaveThreadParams*>(args);
-    const int verbose = stp->verbose;
+void save(const SaveThreadParams& stp) {
+    const bool verbose = stp.verbose;
 
     for (;;) {
         Task v;
 
-        tosave.get(v);
+        to_save_queue.get(v);
 
         if (v.id == -233) {
             break;
         }
 
-        // free input pixel data
+        // Free input pixel data
         {
-            unsigned char* pixeldata = static_cast<unsigned char*>(v.inimage.data);
             if (v.webp == 1) {
-                free(pixeldata);
+                free(v.in_image.data);
             } else {
 #if _WIN32
-                free(pixeldata);
+                free(v.in_image.data);
 #else
-                stbi_image_free(pixeldata);
+                stbi_image_free(v.in_image.data);
 #endif
             }
         }
 
-        const auto ext = get_file_extension(v.outpath);
+        const auto ext = v.out_path.extension().u8string();
 
-        // create folder if not exists
-        const fs::path fs_path = fs::absolute(v.outpath);
-        const std::string parent_path = fs_path.parent_path().string();
-        if (fs::exists(parent_path) != 1) {
-            stp->logger_info->info("Create folder: {}", parent_path);
-            fs::create_directories(parent_path);
+        // Create folder if not exists
+        const auto fs_path = std::filesystem::absolute(v.out_path);
+        const auto parent_path = fs_path.parent_path();
+        if (!std::filesystem::exists(parent_path)) {
+            stp.logger_info->info(PATHSTR("Create folder: {}"), p2s(parent_path));
+            std::filesystem::create_directories(parent_path);
         }
 
         int success = 0;
 
-        if (ext == PATHSTR(".webp") || ext == PATHSTR(".WEBP")) {
-            success = webp_save(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, static_cast<const unsigned char*>(v.outimage.data));
-        } else if (ext == PATHSTR(".png") || ext == PATHSTR(".PNG")) {
+        if (ext == u8".webp" || ext == u8".WEBP") {
+            success = webp_save(v.out_path.c_str(), v.out_image.w, v.out_image.h, v.out_image.c, static_cast<const unsigned char*>(v.out_image.data));
+        } else if (ext == u8".png" || ext == u8".PNG") {
 #if _WIN32
-            success = wic_encode_image(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data);
+            success = wic_encode_image(v.out_path.c_str(), v.out_image.w, v.out_image.h, v.out_image.c, v.out_image.data);
 #else
-            success = stbi_write_png(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data, 0);
+            success = stbi_write_png(v.out_path.c_str(), v.out_image.w, v.out_image.h, v.out_image.c, v.out_image.data, 0);
 #endif
-        } else if (ext == PATHSTR(".jpg") || ext == PATHSTR(".JPG") || ext == PATHSTR(".jpeg") || ext == PATHSTR(".JPEG")) {
+        } else if (ext == u8".jpg" || ext == u8".JPG" || ext == u8".jpeg" || ext == u8".JPEG") {
 #if _WIN32
-            success = wic_encode_jpeg_image(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data);
+            success = wic_encode_jpeg_image(v.out_path.c_str(), v.out_image.w, v.out_image.h, v.out_image.c, v.out_image.data);
 #else
-            success = stbi_write_jpg(v.outpath.c_str(), v.outimage.w, v.outimage.h, v.outimage.elempack, v.outimage.data, 100);
+            success = stbi_write_jpg(v.out_path.c_str(), v.out_image.w, v.out_image.h, v.out_image.c, v.out_image.data, 100);
 #endif
         }
+
+        // Free output image memory
+        free(v.out_image.data);
 
         if (success) {
             if (verbose) {
-                stp->logger_info->info(PATHSTR("{} -> {} done, took {}us"), v.inpath, v.outpath, v.elapsed.count());
+                stp.logger_info->info(PATHSTR("{} -> {} done, took {}us"), p2s(v.in_path), p2s(v.out_path), v.elapsed.count());
             }
         } else {
-            stp->logger_error->error(PATHSTR("Encode failed: {}"), v.outpath);
+            stp.logger_error->error(PATHSTR("Encode failed: {}"), p2s(v.out_path));
+        }
+    }
+}
+
+void print_usage() {
+    fprintf(stderr, "Usage: upsclr-ncnn-vulkan-2 -i infile -o outfile [options]...\n\n");
+    fprintf(stderr, "  -h,--help                   show this help\n");
+    fprintf(stderr, "  -i,--input INPUT-PATH       input image path (jpg/png/webp) or directory\n");
+    fprintf(stderr, "  -o,--output OUTPUT-PATH     output image path (jpg/png/webp) or directory\n");
+    fprintf(stderr, "  -s,--scale SCALE            upscale ratio (can be 2, 3, 4. default=4)\n");
+    fprintf(stderr, "  -t,--tile-size TILE-SIZE    tile size (>=32/0=auto, default=0) can be 0,0,0 for multi-gpu\n");
+    fprintf(stderr, "  -m,--model-path MODEL-PATH  folder path to the pre-trained models. default=models\n");
+    fprintf(stderr, "  -n,--model-name MODEL-NAME  model name (default depends on engine)\n");
+    fprintf(stderr, "  -e,--engine ENGINE          engine to use (realesrgan, realcugan, default=realesrgan)\n");
+    fprintf(stderr, "  -g,--gpu-id GPU-ID          gpu device to use (default=auto) can be 0,1,2 for multi-gpu\n");
+    fprintf(stderr, "  -j,--threads THREADS        thread count for load/proc/save (default=1:2:2) can be 1:2,2,2:2 for multi-gpu\n");
+    fprintf(stderr, "  -x,--tta-mode               enable tta mode\n");
+    fprintf(stderr, "  -f,--format FORMAT          output image format (jpg/png/webp, default=ext/png)\n");
+    fprintf(stderr, "  -v,--verbose                verbose output\n");
+    fprintf(stderr, "  -y,--noise NOISE            noise level (-1/0/1/2/3, default=0, only for realcugan)\n");
+    fprintf(stderr, "  -z,--sync-gap SYNCGAP       sync gap mode (0/1/2/3, default=0, only for realcugan)\n");
+
+    // Print available engines
+    PluginManager::print_available_engines();
+}
+
+// Parse comma-separated values into vector of integers
+std::vector<int> parse_int_list(const std::string& str) {
+    std::vector<int> result;
+    std::stringstream ss(str);
+    std::string item;
+
+    while (std::getline(ss, item, ',')) {
+        if (!item.empty()) {
+            try {
+                result.push_back(std::stoi(item));
+            } catch (const std::exception&) {
+                // Skip invalid values
+            }
         }
     }
 
-    return 0;
+    return result;
 }
 
 }  // namespace
 
-#if _WIN32
-int wmain(int argc, wchar_t** argv)
-#else
-int main(int argc, char** argv)
-#endif
-{
+int main(int argc, char** argv) {
     const auto logger_info = spdlog::stdout_color_mt("console");
     const auto logger_error = spdlog::stderr_color_mt("stderr");
 
-    path_t inputpath;
-    path_t outputpath;
-    int scale = 4;
+    // Parse command line arguments
+    cxxopts::Options options("upsclr-ncnn-vulkan-2", "Image super-resolution using upsclr-plugin-ncnn-vulkan");
+
+    options.add_options()                                                                                                    //
+        ("h,help", "Show this help")                                                                                         //
+        ("i,input", "Input image path (jpg/png/webp) or directory", cxxopts::value<std::string>())                           //
+        ("o,output", "Output image path (jpg/png/webp) or directory", cxxopts::value<std::string>())                         //
+        ("s,scale", "Upscale ratio (2, 3, 4)", cxxopts::value<int>()->default_value("4"))                                    //
+        ("t,tile-size", "Tile size (>=32/0=auto)", cxxopts::value<std::string>()->default_value("0"))                        //
+        ("m,model-dir", "Directory path to the pre-trained models", cxxopts::value<std::string>()->default_value("models"))  //
+        ("n,model-name", "Model name", cxxopts::value<std::string>())                                                        //
+        ("e,engine", "Engine to use (realesrgan, realcugan)", cxxopts::value<std::string>()->default_value("realesrgan"))    //
+        ("g,gpu-id", "GPU device to use", cxxopts::value<std::string>())                                                     //
+        ("j,threads", "Thread count for load/proc/save", cxxopts::value<std::string>()->default_value("1:2:2"))              //
+        ("x,tta-mode", "Enable TTA mode", cxxopts::value<bool>()->default_value("false"))                                    //
+        ("f,format", "Output image format (jpg/png/webp)", cxxopts::value<std::string>()->default_value("png"))              //
+        ("v,verbose", "Verbose output", cxxopts::value<bool>()->default_value("false"))                                      //
+        ("y,noise", "Noise level (-1/0/1/2/3, only for realcugan)", cxxopts::value<int>()->default_value("0"))               //
+        ("z,sync-gap", "Sync gap mode (0/1/2/3, only for realcugan)", cxxopts::value<int>()->default_value("0"));
+
+    const auto result = options.parse(argc, argv);
+
+    if (result.count("help")) {
+        print_usage();
+        return 0;
+    }
+
+    std::filesystem::path input_path;
+    std::filesystem::path output_path;
+    int scale = result["scale"].as<int>();
     std::vector<int> tile_size;
-    path_t model = PATHSTR("models");
-    std::string modelname = "";
-    std::string engine_name = "realesrgan";
-    int noise = 0;
-    int sync_gap = 0;
+    std::filesystem::path model_dir = u8"models";
+    std::u8string model_name = u8"";
+    std::u8string engine_name = as_utf8(result["engine"].as<std::string>());
+    int noise = result["noise"].as<int>();
+    int sync_gap = result["sync-gap"].as<int>();
     std::vector<int> gpu_id;
     int jobs_load = 1;
     std::vector<int> jobs_proc;
     int jobs_save = 2;
-    int verbose = 0;
-    int tta_mode = 0;
-    path_t format = PATHSTR("png");
+    bool verbose = result["verbose"].as<bool>();
+    int tta_mode = result["tta-mode"].as<bool>() ? 1 : 0;
+    std::u8string format = u8"png";
 
-#if _WIN32
-    setlocale(LC_ALL, "");
-    wchar_t opt;
-    while ((opt = getopt(argc, argv, L"i:o:s:t:m:n:e:g:j:f:y:z:vxh")) != (wchar_t)-1) {
-        switch (opt) {
-            case L'i':
-                inputpath = optarg;
-                break;
-            case L'o':
-                outputpath = optarg;
-                break;
-            case L's':
-                scale = _wtoi(optarg);
-                break;
-            case L't':
-                tile_size = parse_optarg_int_array(optarg);
-                break;
-            case L'm':
-                model = optarg;
-                break;
-            case L'n':
-                modelname.resize(wcslen(optarg) + 1);
-                sprintf_s(&modelname[0], modelname.size(), "%ls", optarg);
-                modelname.resize(wcslen(optarg));
-                break;
-            case L'e':
-                engine_name.resize(wcslen(optarg) + 1);
-                sprintf_s(&engine_name[0], engine_name.size(), "%ls", optarg);
-                engine_name.resize(wcslen(optarg));
-                break;
-            case L'g':
-                gpu_id = parse_optarg_int_array(optarg);
-                break;
-            case L'j':
-                swscanf(optarg, L"%d:%*[^:]:%d", &jobs_load, &jobs_save);
-                jobs_proc = parse_optarg_int_array(wcschr(optarg, L':') + 1);
-                break;
-            case L'f':
-                format = optarg;
-                break;
-            case L'v':
-                verbose = 1;
-                break;
-            case L'x':
-                tta_mode = 1;
-                break;
-            case L'y':
-                noise = _wtoi(optarg);
-                break;
-            case L'z':
-                sync_gap = _wtoi(optarg);
-                break;
-            case L'h':
-            default:
-                print_usage();
-                return -1;
+    // Get input and output paths
+    if (result.count("input")) {
+        input_path = as_utf8(result["input"].as<std::string>());
+    } else {
+        print_usage();
+        return -1;
+    }
+
+    if (result.count("output")) {
+        output_path = as_utf8(result["output"].as<std::string>());
+    } else {
+        print_usage();
+        return -1;
+    }
+
+    // Parse tile size
+    if (result.count("tile-size")) {
+        std::string tile_str = result["tile-size"].as<std::string>();
+        tile_size = parse_int_list(tile_str);
+    }
+
+    // Parse model path
+    if (result.count("model-dir")) {
+        model_dir = as_utf8(result["model-dir"].as<std::string>());
+    }
+
+    // Parse model name
+    if (result.count("model-name")) {
+        model_name = as_utf8(result["model-name"].as<std::string>());
+    }
+
+    // Parse GPU ID
+    if (result.count("gpu-id")) {
+        std::string gpu_str = result["gpu-id"].as<std::string>();
+        gpu_id = parse_int_list(gpu_str);
+    }
+
+    // Parse thread count
+    if (result.count("threads")) {
+        std::string threads_str = result["threads"].as<std::string>();
+        size_t pos1 = threads_str.find(':');
+        if (pos1 != std::string::npos) {
+            jobs_load = std::stoi(threads_str.substr(0, pos1));
+
+            size_t pos2 = threads_str.find(':', pos1 + 1);
+            if (pos2 != std::string::npos) {
+                std::string proc_str = threads_str.substr(pos1 + 1, pos2 - pos1 - 1);
+                jobs_proc = parse_int_list(proc_str);
+                jobs_save = std::stoi(threads_str.substr(pos2 + 1));
+            } else {
+                std::string proc_str = threads_str.substr(pos1 + 1);
+                jobs_proc = parse_int_list(proc_str);
+            }
         }
     }
-#else   // _WIN32
-    int opt;
-    while ((opt = getopt(argc, argv, "i:o:s:t:m:n:e:g:j:f:y:z:vxh")) != -1) {
-        switch (opt) {
-            case 'i':
-                inputpath = optarg;
-                break;
-            case 'o':
-                outputpath = optarg;
-                break;
-            case 's':
-                scale = atoi(optarg);
-                break;
-            case 't':
-                tile_size = parse_optarg_int_array(optarg);
-                break;
-            case 'm':
-                model = optarg;
-                break;
-            case 'n':
-                modelname = optarg;
-                break;
-            case 'e':
-                engine_name = optarg;
-                break;
-            case 'g':
-                gpu_id = parse_optarg_int_array(optarg);
-                break;
-            case 'j':
-                sscanf(optarg, "%d:%*[^:]:%d", &jobs_load, &jobs_save);
-                jobs_proc = parse_optarg_int_array(strchr(optarg, ':') + 1);
-                break;
-            case 'f':
-                format = optarg;
-                break;
-            case 'v':
-                verbose = 1;
-                break;
-            case 'x':
-                tta_mode = 1;
-                break;
-            case 'y':
-                noise = atoi(optarg);
-                break;
-            case 'z':
-                sync_gap = atoi(optarg);
-                break;
-            case 'h':
-            default:
-                print_usage();
-                return -1;
-        }
-    }
-#endif  // _WIN32
 
-    if (inputpath.empty() || outputpath.empty()) {
+    // Parse output format
+    if (result.count("format")) {
+        format = as_utf8(result["format"].as<std::string>());
+    }
+
+    if (input_path.empty() || output_path.empty()) {
         print_usage();
         return -1;
     }
 
     if (gpu_id.empty()) {
         if (verbose) {
-            logger_info->info("No GPU specified, using default GPU device {}", ncnn::get_default_gpu_index());
+            logger_info->info("No GPU specified, using default GPU device");
         }
-        gpu_id.push_back(ncnn::get_default_gpu_index());
+        gpu_id.push_back(DEFAULT_GPU_DEVICE_ID_PLACEHOLDER);
     }
 
     if (tile_size.empty()) {
@@ -726,250 +737,191 @@ int main(int argc, char** argv)
         }
     }
 
-    if (!path_is_directory(outputpath)) {
-        // guess format from outputpath no matter what format argument specified
-        const auto ext = get_file_extension(outputpath);
+    if (!std::filesystem::is_directory(output_path)) {
+        // guess format from output_path no matter what format argument specified
+        const auto ext = output_path.extension().u8string();
 
-        if (ext == PATHSTR(".png") || ext == PATHSTR(".PNG")) {
-            format = PATHSTR("png");
-        } else if (ext == PATHSTR(".webp") || ext == PATHSTR(".WEBP")) {
-            format = PATHSTR("webp");
-        } else if (ext == PATHSTR(".jpg") || ext == PATHSTR(".JPG") || ext == PATHSTR(".jpeg") || ext == PATHSTR(".JPEG")) {
-            format = PATHSTR("jpg");
+        if (ext == u8".png" || ext == u8".PNG") {
+            format = u8"png";
+        } else if (ext == u8".webp" || ext == u8".WEBP") {
+            format = u8"webp";
+        } else if (ext == u8".jpg" || ext == u8".JPG" || ext == u8".jpeg" || ext == u8".JPEG") {
+            format = u8"jpg";
         } else {
-            logger_error->error(PATHSTR("Invalid output path extension: '{}'"), ext);
+            logger_error->error("Invalid output path extension: '{}'", utf8_to_ascii(ext));
             return -1;
         }
     }
 
-    if (format != PATHSTR("png") && format != PATHSTR("webp") && format != PATHSTR("jpg")) {
-        logger_error->error(PATHSTR("Invalid output format: '{}'"), format);
+    if (format != u8"png" && format != u8"webp" && format != u8"jpg") {
+        logger_error->error("Invalid output format: '{}'", utf8_to_ascii(format));
         return -1;
     }
 
+    // Normalize config
+    if (jobs_proc.size() != gpu_id.size()) {
+        jobs_proc.resize(gpu_id.size(), jobs_proc[0]);
+    }
+
+    if (tile_size.size() != gpu_id.size()) {
+        tile_size.resize(gpu_id.size(), tile_size[0]);
+    }
+
+    // Count total proc thread count
+    int total_jobs_proc = 0;
+    for (const auto count : jobs_proc) {
+        total_jobs_proc += count;
+    }
+
     // collect input and output filepath
-    std::vector<path_t> input_files;
-    std::vector<path_t> output_files;
+    std::vector<std::filesystem::path> input_files;
+    std::vector<std::filesystem::path> output_files;
     {
-        if (path_is_directory(inputpath) && path_is_directory(outputpath)) {
-            std::vector<path_t> filenames;
-            int lr = list_directory(inputpath, filenames);
-            if (lr != 0) {
+        if (std::filesystem::is_directory(input_path) && std::filesystem::is_directory(output_path)) {
+            std::vector<std::filesystem::path> filenames;
+            if (list_directory(input_path, filenames) != 0) {
                 return -1;
             }
 
-            const int count = filenames.size();
+            const size_t count = filenames.size();
             input_files.resize(count);
             output_files.resize(count);
 
-            path_t last_filename;
-            path_t last_filename_noext;
-            for (int i = 0; i < count; i++) {
-                path_t filename = filenames[i];
-                path_t filename_noext = get_file_name_without_extension(filename);
-                path_t output_filename = filename_noext + PATHSTR(".") + format;
+            std::filesystem::path last_filename;
+            std::filesystem::path last_filename_noext;
+            for (size_t i = 0; i < count; i++) {
+                std::filesystem::path filename = filenames[i];
+                std::filesystem::path filename_noext = filename.stem();
+                std::filesystem::path output_filename = filename;
+                output_filename.replace_extension(format);
 
                 // filename list is sorted, check if output image path conflicts
                 if (filename_noext == last_filename_noext) {
-                    path_t output_filename2 = filename + PATHSTR(".") + format;
-                    logger_error->warn(PATHSTR("Image {} has same name with {}! {} will output {}"), filename, last_filename, filename, output_filename2);
+                    std::filesystem::path output_filename2 = filename;
+                    output_filename2 += u8"." + format;
+                    logger_error->warn(PATHSTR("Image {} has same name with {}! {} will output {}"), p2s(filename), p2s(last_filename), p2s(filename), p2s(output_filename2));
                     output_filename = output_filename2;
                 } else {
                     last_filename = filename;
                     last_filename_noext = filename_noext;
                 }
 
-                input_files[i] = inputpath + PATHSTR('/') + filename;
-                output_files[i] = outputpath + PATHSTR('/') + output_filename;
+                input_files[i] = input_path / filename;
+                output_files[i] = output_path / output_filename;
             }
-        } else if (!path_is_directory(inputpath) && !path_is_directory(outputpath)) {
-            input_files.push_back(inputpath);
-            output_files.push_back(outputpath);
+        } else if (!std::filesystem::is_directory(input_path) && !std::filesystem::is_directory(output_path)) {
+            input_files.push_back(input_path);
+            output_files.push_back(output_path);
         } else {
-            logger_error->error("inputpath and outputpath must be either file or directory at the same time");
+            logger_error->error("input path and output path must be either file or directory at the same time");
             return -1;
         }
     }
 
-    const auto* engine_info = SuperResolutionEngineFactory::get_engine_info(ascii_to_utf8(engine_name));
+    // Find engine by name
+    const size_t engine_index = PluginManager::find_engine_by_name(engine_name);
+    if (engine_index == static_cast<size_t>(-1)) {
+        logger_error->error("Unknown engine: '{}'", utf8_to_ascii(engine_name));
+        return -1;
+    }
+
+    const auto* engine_info = upsclr_plugin_get_engine_info(engine_index);
     if (engine_info == nullptr) {
-        logger_error->error("Unknown engine: '{}'", engine_name);
+        logger_error->error("Unknown engine: '{}'", utf8_to_ascii(engine_name));
         return -1;
     }
 
-    if (modelname.empty()) {
-        modelname = utf8_to_ascii(engine_info->default_model);
-    }
+    std::vector<std::unique_ptr<PluginManager>> plugin_managers;
+    for (size_t i = 0; i < gpu_id.size(); i++) {
+        // Configure plugin
+        const std::u8string config_json = generate_engine_config(
+            engine_name, model_dir.u8string(), model_name, gpu_id[i], tile_size[i], tta_mode, noise, sync_gap);
 
-    if (!std::ranges::any_of(engine_info->model_names, [&modelname](const auto& name) {
-            return name == ascii_to_utf8(modelname);
-        })) {
-        logger_error->error("Unknown model: '{}'", modelname);
-        return -1;
-    }
+        logger_info->info("Config JSON: {}", utf8_to_ascii(config_json));
 
-#if _WIN32
-    CoInitializeEx(NULL, COINIT_MULTITHREADED);
-#endif
+        // Create plugin instance
+        auto plugin_manager = std::make_unique<PluginManager>(engine_index, config_json, logger_info, logger_error);
 
-    ncnn::create_gpu_instance();
-
-    const auto use_gpu_count = gpu_id.size();
-
-    if (jobs_proc.size() != use_gpu_count) {
-        jobs_proc.resize(use_gpu_count, jobs_proc[0]);
-    }
-
-    if (tile_size.size() != use_gpu_count) {
-        tile_size.resize(use_gpu_count, tile_size[0]);
-    }
-
-    const int cpu_count = std::max(1, ncnn::get_cpu_count());
-    jobs_load = std::min(jobs_load, cpu_count);
-    jobs_save = std::min(jobs_save, cpu_count);
-
-    int gpu_count = ncnn::get_gpu_count();
-    for (std::size_t i = 0; i < use_gpu_count; i++) {
-        if (gpu_id[i] < 0 || gpu_id[i] >= gpu_count) {
-            logger_error->error("Invalid gpu device: {} (expected: 0-{})", gpu_id[i], gpu_count - 1);
-
-            ncnn::destroy_gpu_instance();
+        // Preload
+        UpsclrErrorCode preload_result = plugin_manager->preload(scale);
+        if (preload_result != UPSCLR_SUCCESS) {
+            logger_error->error("Failed to preload engine: {}", static_cast<int>(preload_result));
             return -1;
         }
+
+        plugin_managers.emplace_back(std::move(plugin_manager));
     }
 
-    int total_jobs_proc = 0;
-    for (std::size_t i = 0; i < use_gpu_count; i++) {
-        const int gpu_queue_count = ncnn::get_gpu_info(gpu_id[i]).compute_queue_count();
-        jobs_proc[i] = std::min(jobs_proc[i], gpu_queue_count);
-        total_jobs_proc += jobs_proc[i];
-    }
-
+    // Main processing
     {
-        std::vector<std::unique_ptr<SuperResolutionEngine>> engines;
+        std::atomic<long long> total_elapsed(0);
 
-        for (std::size_t i = 0; i < use_gpu_count; i++) {
-            SuperResolutionEngineConfig config{
-                .model_dir = fs::path(model),
-                .model = ascii_to_utf8(modelname),
+        // Set load thread parameters
+        LoadThreadParams ltp;
+        ltp.scale = scale;
+        ltp.jobs_load = jobs_load;
+        ltp.input_files = input_files;
+        ltp.output_files = output_files;
+        ltp.logger_info = logger_info;
+        ltp.logger_error = logger_error;
 
-                .gpu_id = gpu_id[i],
-                .tta_mode = tta_mode != 0,
-                .num_threads = 1,
+        // Create load thread
+        std::thread load_thread(load, ltp);
 
-                .noise = noise,
-                .sync_gap = sync_gap,
+        // Create processing threads
+        std::vector<std::thread> proc_threads;
+        for (int i = 0; i < gpu_id.size(); i++) {
+            ProcThreadParams ptp;
+            ptp.plugin_manager = plugin_managers[i].get();
+            ptp.total_elapsed = &total_elapsed;
 
-                .engine_name = ascii_to_utf8(engine_name),
-
-                .logger_error = logger_error,
-            };
-
-#if _WIN32
-            logger_info->info(L"Creating {} instance for gpu_id={}, model={}, model_dir={}", tow(engine_name), config.gpu_id, tow(config.model), config.model_dir.wstring());
-#else
-            logger_info->info("Creating {} instance for gpu_id={}, model={}, model_dir={}", engine_name, config.gpu_id, config.model, config.model_dir.string());
-#endif
-
-            auto engine = SuperResolutionEngineFactory::create_engine(config);
-
-            // Check if the instance was created successfully
-            if (engine == nullptr) {
-                logger_error->error("Failed to create {} instance for gpu_id={}", engine_name, config.gpu_id);
-                return -1;
+            for (int j = 0; j < jobs_proc[i]; j++) {
+                proc_threads.emplace_back(std::thread(proc, ptp));
             }
-
-            engine->preload(scale);
-
-            engines.emplace_back(std::move(engine));
         }
 
-        // main routine
-        {
-            std::atomic<long long> total_elapsed(0);
+        // Set save thread parameters
+        SaveThreadParams stp;
+        stp.verbose = verbose;
+        stp.logger_info = logger_info;
+        stp.logger_error = logger_error;
 
-            // load image
-            LoadThreadParams ltp;
-            ltp.scale = scale;
-            ltp.jobs_load = jobs_load;
-            ltp.input_files = input_files;
-            ltp.output_files = output_files;
-            ltp.logger_info = logger_info;
-            ltp.logger_error = logger_error;
-
-            ncnn::Thread load_thread(load, static_cast<void*>(&ltp));
-
-            // engine proc
-            std::vector<ProcThreadParams> ptp(use_gpu_count);
-            for (std::size_t i = 0; i < use_gpu_count; i++) {
-                ptp[i].engine = engines[i].get();
-                ptp[i].default_config = ProcessConfig();
-                ptp[i].default_config.tile_size = engines[i]->get_default_tile_size();
-                ptp[i].total_elapsed = &total_elapsed;
-
-                // Override scale if specified
-                if (scale > 0) {
-                    ptp[i].default_config.scale = scale;
-                }
-
-                // Override tile_size if specified
-                if (!tile_size.empty() && tile_size[i] > 0) {
-                    ptp[i].default_config.tile_size = tile_size[i];
-                }
-            }
-
-            std::vector<ncnn::Thread*> proc_threads(total_jobs_proc);
-            {
-                int total_jobs_proc_id = 0;
-                for (std::size_t i = 0; i < use_gpu_count; i++) {
-                    for (int j = 0; j < jobs_proc[i]; j++) {
-                        proc_threads[total_jobs_proc_id++] = new ncnn::Thread(proc, static_cast<void*>(&ptp[i]));
-                    }
-                }
-            }
-
-            // save image
-            SaveThreadParams stp;
-            stp.verbose = verbose;
-            stp.logger_info = logger_info;
-            stp.logger_error = logger_error;
-
-            std::vector<ncnn::Thread*> save_threads(jobs_save);
-            for (int i = 0; i < jobs_save; i++) {
-                save_threads[i] = new ncnn::Thread(save, static_cast<void*>(&stp));
-            }
-
-            // end
-            load_thread.join();
-
-            Task end;
-            end.id = -233;
-
-            for (int i = 0; i < total_jobs_proc; i++) {
-                toproc.put(end);
-            }
-
-            for (int i = 0; i < total_jobs_proc; i++) {
-                proc_threads[i]->join();
-                delete proc_threads[i];
-            }
-
-            for (int i = 0; i < jobs_save; i++) {
-                tosave.put(end);
-            }
-
-            for (int i = 0; i < jobs_save; i++) {
-                save_threads[i]->join();
-                delete save_threads[i];
-            }
-
-            logger_info->info(std::format("Average processing time: {:.2f}ms/MP", static_cast<double>(total_elapsed) / 1000 / input_files.size()));
+        // Create save threads
+        std::vector<std::thread> save_threads;
+        for (int i = 0; i < jobs_save; i++) {
+            save_threads.emplace_back(std::thread(save, stp));
         }
 
-        engines.clear();
+        // Wait for load thread to finish
+        load_thread.join();
+
+        // Send end task
+        Task end;
+        end.id = -233;
+
+        for (int i = 0; i < total_jobs_proc; i++) {
+            to_proc_queue.put(end);
+        }
+
+        // Wait for processing threads to finish
+        for (auto& thread : proc_threads) {
+            thread.join();
+        }
+
+        // Send end task to save threads
+        for (int i = 0; i < jobs_save; i++) {
+            to_save_queue.put(end);
+        }
+
+        // Wait for save threads to finish
+        for (auto& thread : save_threads) {
+            thread.join();
+        }
+
+        logger_info->info(std::format("Average processing time: {:.2f}ms/MP", static_cast<double>(total_elapsed) / 1000 / input_files.size()));
     }
 
-    ncnn::destroy_gpu_instance();
+    plugin_managers.clear();
 
     return 0;
 }

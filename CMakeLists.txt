@@ -114,61 +114,30 @@ add_library(upsclr-plugin-ncnn-vulkan SHARED
     src/plugin/upsclr_plugin.cpp
 )
 
-# Set export macro for the library
-target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE UPSCLR_EXPORTS)
-
 # Add the executable target
 add_executable(upsclr-ncnn-vulkan
     src/bin/main.cpp
-    src/engines/base.cpp
-    src/engines/engine_factory.cpp
-    src/engines/realesrgan/realesrgan.cpp
-    src/engines/realcugan/realcugan.cpp
 )
 
-add_executable(upsclr-ncnn-vulkan-2
-    src/bin/main2.cpp
-)
-
-find_package(cxxopts CONFIG REQUIRED)
-target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE cxxopts::cxxopts)
-
+# Find packages
 find_package(glaze CONFIG REQUIRED)
-target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE glaze::glaze)
-target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE glaze::glaze)
-
-if(WIN32)
-    target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
-    target_compile_definitions(upsclr-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
-    target_compile_definitions(upsclr-ncnn-vulkan-2 PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
-
-    target_sources(upsclr-ncnn-vulkan PRIVATE src/bin/win_utf8.cpp)
-    target_sources(upsclr-ncnn-vulkan-2 PRIVATE src/bin/win_utf8.cpp)
-endif()
-
-find_package(Vulkan REQUIRED)
-target_link_libraries(upsclr-ncnn-vulkan PRIVATE Vulkan::Vulkan)
-target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE Vulkan::Vulkan)
-
-find_package(ncnn CONFIG REQUIRED)
-target_link_libraries(upsclr-ncnn-vulkan PRIVATE ncnn)
-target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE ncnn)
-
-find_package(Stb REQUIRED)
-target_include_directories(upsclr-ncnn-vulkan PRIVATE ${Stb_INCLUDE_DIR})
-target_include_directories(upsclr-ncnn-vulkan-2 PRIVATE ${Stb_INCLUDE_DIR})
-
-find_package(WebP CONFIG REQUIRED)
-target_link_libraries(upsclr-ncnn-vulkan PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
-target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
-
 find_package(spdlog CONFIG REQUIRED)
-target_link_libraries(upsclr-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
-target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE spdlog::spdlog_header_only)
+find_package(ncnn CONFIG REQUIRED)
+find_package(Vulkan REQUIRED)
+find_package(cxxopts CONFIG REQUIRED)
+find_package(WebP CONFIG REQUIRED)
+find_package(Stb REQUIRED)
+
+# -- Library target --
+target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE UPSCLR_EXPORTS)
+
+target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE ncnn)
+target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE Vulkan::Vulkan)
+target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE glaze::glaze)
 target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
 
-add_dependencies(upsclr-ncnn-vulkan generate-spirv)
-add_dependencies(upsclr-plugin-ncnn-vulkan generate-spirv)
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE cxxopts::cxxopts)
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE glaze::glaze)
 
 if(USE_STATIC_MOLTENVK)
     find_library(CoreFoundation NAMES CoreFoundation)
@@ -190,25 +159,29 @@ if(USE_STATIC_MOLTENVK)
         ${Foundation}
         ${CoreFoundation}
     )
-
-    target_link_libraries(upsclr-ncnn-vulkan PRIVATE
-        ${Metal}
-        ${QuartzCore}
-        ${CoreGraphics}
-        ${Cocoa}
-        ${IOKit}
-        ${IOSurface}
-        ${Foundation}
-        ${CoreFoundation}
-    )
 endif()
 
 if(OPENMP_FOUND)
-    target_link_libraries(upsclr-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
     target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
-target_link_libraries(upsclr-ncnn-vulkan-2 PRIVATE upsclr-plugin-ncnn-vulkan)
+# Build the SPIR-V shaders
+add_dependencies(upsclr-ncnn-vulkan generate-spirv)
+
+# -- Executable target --
+target_include_directories(upsclr-ncnn-vulkan PRIVATE ${Stb_INCLUDE_DIR})
+
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE upsclr-plugin-ncnn-vulkan)
+
+# UTF-8 support for Windows
+if(WIN32)
+    target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
+    target_compile_definitions(upsclr-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
+
+    target_sources(upsclr-ncnn-vulkan PRIVATE src/bin/win_utf8.cpp)
+endif()
 
 # Install the library
 install(TARGETS upsclr-plugin-ncnn-vulkan
@@ -222,6 +195,3 @@ install(FILES
     src/plugin/upsclr_plugin.h
     DESTINATION include/upsclr-plugin-ncnn-vulkan
 )
-
-# Add examples directory
-#add_subdirectory(examples)
