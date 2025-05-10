@@ -68,11 +68,11 @@ typedef struct UpsclrEngineInstance UpsclrEngineInstance;
  * @brief Structure containing validation results for engine configuration
  */
 typedef struct UpsclrEngineConfigValidationResult {
-    bool is_valid;                 /**< Whether the configuration is valid */
-    size_t error_count;            /**< Number of errors */
-    size_t warning_count;          /**< Number of warnings */
-    const char8_t** warning_messages; /**< Array of warning messages */
-    const char8_t** error_messages;   /**< Array of error messages */
+    bool is_valid;                          /**< Whether the configuration is valid */
+    size_t error_count;                     /**< Number of errors */
+    size_t warning_count;                   /**< Number of warnings */
+    const char8_t* const* warning_messages; /**< Array of warning messages */
+    const char8_t* const* error_messages;   /**< Array of error messages */
 } UpsclrEngineConfigValidationResult;
 
 /**
