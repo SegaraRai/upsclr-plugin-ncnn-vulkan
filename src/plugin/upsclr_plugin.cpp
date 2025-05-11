@@ -40,9 +40,19 @@
 
 template <>
 struct glz::meta<std::u8string> {
+    static constexpr std::string_view name = "u8string";
+
     static constexpr auto read_x = [](std::u8string& s, const std::string& input) { s = as_utf8(input); };
     static constexpr auto write_x = [](const std::u8string& s) -> std::string { return as_string(s); };
     static constexpr auto value = glz::custom<read_x, write_x>;
+};
+
+template <>
+struct glz::detail::to_json_schema<std::u8string> {
+    template <auto Opts>
+    static void op(auto& s, auto&) {
+        s.type = {"string"};
+    }
 };
 
 struct EngineConfigEx : public SuperResolutionEngineConfig {
