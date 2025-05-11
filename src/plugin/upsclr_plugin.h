@@ -80,12 +80,15 @@ typedef struct UpsclrEngineConfigValidationResult {
  * @brief Enumeration defining error codes for API functions
  */
 typedef enum UpsclrErrorCode {
-    UPSCLR_SUCCESS = 0,                /**< Success */
-    UPSCLR_ERROR_INVALID_ARGUMENT = 1, /**< Invalid argument */
-    UPSCLR_ERROR_ENGINE_NOT_FOUND = 2, /**< Engine not found */
-    UPSCLR_ERROR_PRELOAD_FAILED = 3,   /**< Preload operation failed */
-    UPSCLR_ERROR_UPSCALE_FAILED = 4,   /**< Upscale operation failed */
-    UPSCLR_ERROR_OTHER = 9999,         /**< Other error */
+    UPSCLR_SUCCESS = 0,                          /**< Success */
+    UPSCLR_ERROR_PLUGIN_NOT_INITIALIZED = 1,     /**< Plugin not initialized */
+    UPSCLR_ERROR_PLUGIN_ALREADY_INITIALIZED = 2, /**< Plugin already initialized */
+    UPSCLR_ERROR_PLUGIN_ALREADY_DESTROYED = 3,   /**< Plugin already destroyed */
+    UPSCLR_ERROR_INVALID_ARGUMENT = 4,           /**< Invalid argument */
+    UPSCLR_ERROR_ENGINE_NOT_FOUND = 5,           /**< Engine not found */
+    UPSCLR_ERROR_PRELOAD_FAILED = 6,             /**< Preload operation failed */
+    UPSCLR_ERROR_UPSCALE_FAILED = 7,             /**< Upscale operation failed */
+    UPSCLR_ERROR_OTHER = 9999,                   /**< Other error */
 } UpsclrErrorCode;
 
 /**
@@ -96,6 +99,20 @@ typedef enum UpsclrColorFormat {
     UPSCLR_COLOR_FORMAT_RGB = 0, /**< RGB format (Red, Green, Blue) */
     UPSCLR_COLOR_FORMAT_BGR = 1, /**< BGR format (Blue, Green, Red) */
 } UpsclrColorFormat;
+
+/**
+ * @brief Initialize the plugin
+ *
+ * @return Error code indicating the result
+ */
+UPSCLR_API UpsclrErrorCode upsclr_plugin_initialize();
+
+/**
+ * @brief Shutdown the plugin
+ *
+ * @return Error code indicating the result
+ */
+UPSCLR_API UpsclrErrorCode upsclr_plugin_shutdown();
 
 /**
  * @brief Get information about the plugin

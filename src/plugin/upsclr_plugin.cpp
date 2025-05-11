@@ -75,6 +75,12 @@ void free_u8(char8_t* str) {
     std::free(str);
 }
 
+enum class PluginState {
+    READY,
+    NOT_INITIALIZED,
+    DESTROYED,
+};
+
 struct UpsclrEngineInfoRAII final {
     UpsclrEngineInfo info;
 
@@ -120,10 +126,13 @@ std::shared_mutex g_mutex;
 std::mutex g_validation_results_mutex;
 std::shared_mutex g_engine_instances_mutex;
 
-// Storage for validation results
+// Global plugin state (Use `g_mutex`)
+PluginState g_plugin_state = PluginState::NOT_INITIALIZED;
+
+// Storage for validation results (Use `g_validation_results_mutex`)
 std::unordered_map<const UpsclrEngineConfigValidationResult*, std::unique_ptr<UpsclrEngineConfigValidationResult, std::function<void(UpsclrEngineConfigValidationResult*)>>> g_validation_result_map;
 
-// Storage for engine instances
+// Storage for engine instances (Use `g_engine_instances_mutex`)
 std::unordered_map<UpsclrEngineInstance*, std::unique_ptr<UpsclrEngineInstance>> g_engine_instance_map;
 
 // Plugin information
@@ -480,8 +489,20 @@ class EngineAdapterRegistry final {
 
 namespace {
 
-void initialize_all() {
+}  // namespace
+
+// Plugin API implementation
+extern "C" {
+
+UPSCLR_API UpsclrErrorCode upsclr_plugin_initialize() {
     std::lock_guard lk(g_mutex);
+
+    if (g_plugin_state != PluginState::NOT_INITIALIZED && g_plugin_state != PluginState::DESTROYED) {
+        return UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_ALREADY_INITIALIZED;
+    }
+
+    std::lock_guard validation_storage_lk(g_validation_results_mutex);
+    std::lock_guard instance_storage_lk(g_engine_instances_mutex);
 
     {
         auto stderr_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
@@ -504,22 +525,32 @@ void initialize_all() {
             adapter->get_engine_version().c_str(),
             adapter->get_json_schema().c_str()));
     }
+
+    g_plugin_state = PluginState::READY;
+
+    return UpsclrErrorCode::UPSCLR_SUCCESS;
 }
 
-void cleanup_all() {
+UPSCLR_API UpsclrErrorCode upsclr_plugin_shutdown() {
     std::lock_guard lk(g_mutex);
+
+    if (g_plugin_state != PluginState::READY) {
+        return g_plugin_state == PluginState::NOT_INITIALIZED ? UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_NOT_INITIALIZED : UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_ALREADY_DESTROYED;
+    }
+
+    std::lock_guard validation_storage_lk(g_validation_results_mutex);
+    std::lock_guard instance_storage_lk(g_engine_instances_mutex);
 
     g_validation_result_map.clear();
     g_engine_instance_map.clear();
     g_engine_infos.clear();
 
     ncnn::destroy_gpu_instance();
+
+    g_plugin_state = PluginState::DESTROYED;
+
+    return UpsclrErrorCode::UPSCLR_SUCCESS;
 }
-
-}  // namespace
-
-// Plugin API implementation
-extern "C" {
 
 UPSCLR_API const UpsclrPluginInfo* upsclr_plugin_get_info() {
     return &g_plugin_info;
@@ -541,6 +572,10 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_plugin_validate_engi
     const char8_t* config_json,
     size_t config_json_length) {
     std::shared_lock lk(g_mutex);
+
+    if (g_plugin_state != PluginState::READY) {
+        return nullptr;
+    }
 
     const auto& registry = EngineAdapterRegistry::instance();
     const auto adapter = registry.get_adapter(engine_index);
@@ -615,6 +650,11 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_plugin_validate_engi
 
 UPSCLR_API void upsclr_plugin_free_validation_result(const UpsclrEngineConfigValidationResult* result) {
     std::shared_lock lk(g_mutex);
+
+    if (g_plugin_state != PluginState::READY) {
+        return;
+    }
+
     std::lock_guard storage_lk(g_validation_results_mutex);
 
     g_validation_result_map.erase(result);
@@ -625,6 +665,10 @@ UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
     const char8_t* config_json,
     size_t config_json_length) {
     std::shared_lock lk(g_mutex);
+
+    if (g_plugin_state != PluginState::READY) {
+        return nullptr;
+    }
 
     const auto logger_error = spdlog::get("upsclr-plugin-ncnn-vulkan");
 
@@ -671,6 +715,11 @@ UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
 
 UPSCLR_API void upsclr_plugin_destroy_engine_instance(UpsclrEngineInstance* instance) {
     std::shared_lock lk(g_mutex);
+
+    if (g_plugin_state != PluginState::READY) {
+        return;
+    }
+
     std::lock_guard storage_lk(g_engine_instances_mutex);
 
     g_engine_instance_map.erase(instance);
@@ -678,6 +727,11 @@ UPSCLR_API void upsclr_plugin_destroy_engine_instance(UpsclrEngineInstance* inst
 
 UPSCLR_API UpsclrErrorCode upsclr_plugin_preload_upscale(UpsclrEngineInstance* instance, int32_t scale) {
     std::shared_lock lk(g_mutex);
+
+    if (g_plugin_state != PluginState::READY) {
+        return g_plugin_state == PluginState::NOT_INITIALIZED ? UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_NOT_INITIALIZED : UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_ALREADY_DESTROYED;
+    }
+
     std::shared_lock storage_lk(g_engine_instances_mutex);
 
     if (instance == nullptr || instance->engine == nullptr || scale < 1) {
@@ -710,6 +764,11 @@ UPSCLR_API UpsclrErrorCode upsclr_plugin_upscale(
     size_t out_size,
     UpsclrColorFormat out_color_format) {
     std::shared_lock lk(g_mutex);
+
+    if (g_plugin_state != PluginState::READY) {
+        return g_plugin_state == PluginState::NOT_INITIALIZED ? UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_NOT_INITIALIZED : UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_ALREADY_DESTROYED;
+    }
+
     std::shared_lock storage_lk(g_engine_instances_mutex);
 
     // Validate arguments
@@ -754,47 +813,3 @@ UPSCLR_API UpsclrErrorCode upsclr_plugin_upscale(
 }
 
 }  // extern "C"
-
-// Initialize and cleanup
-
-#if _WIN32
-
-BOOL WINAPI DllMain(
-    HINSTANCE hinstDLL,
-    DWORD fdwReason,
-    LPVOID lpvReserved) {
-    switch (fdwReason) {
-        case DLL_PROCESS_ATTACH:
-            initialize_all();
-            break;
-
-        case DLL_PROCESS_DETACH:
-            if (lpvReserved != nullptr) {
-                break;
-            }
-
-            cleanup_all();
-            break;
-    }
-    return TRUE;
-}
-
-#else
-
-namespace {
-class SharedLibraryLifecycle final {
-   public:
-    SharedLibraryLifecycle() {
-        initialize_all();
-    }
-
-    ~SharedLibraryLifecycle() {
-        cleanup_all();
-    }
-}
-
-[[maybe_unused]]
-SharedLibraryLifecycle g_lifecycle;
-}  // namespace
-
-#endif
