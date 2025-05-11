@@ -10,9 +10,13 @@
       }
     },
     {
-      "name": "windows-clang",
+      "name": "windows-clang-x64",
       "inherits": "base",
       "generator": "Ninja Multi-Config",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang-cl.exe",
         "CMAKE_CXX_COMPILER": "clang-cl.exe",
@@ -24,12 +28,12 @@
   "buildPresets": [
     {
       "name": "windows-clang-x64-debug",
-      "configurePreset": "windows-clang",
+      "configurePreset": "windows-clang-x64",
       "configuration": "Debug"
     },
     {
       "name": "windows-clang-x64-release",
-      "configurePreset": "windows-clang",
+      "configurePreset": "windows-clang-x64",
       "configuration": "Release"
     }
   ]
