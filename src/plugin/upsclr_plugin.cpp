@@ -536,7 +536,7 @@ UPSCLR_API const UpsclrEngineInfo* upsclr_plugin_get_engine_info(size_t engine_i
     return &g_engine_infos[engine_index].info;
 }
 
-UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_config(
+UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_plugin_validate_engine_config(
     size_t engine_index,
     const char8_t* config_json,
     size_t config_json_length) {
@@ -613,7 +613,7 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_conf
     return ptr_result;
 }
 
-UPSCLR_API void upsclr_free_validation_result(const UpsclrEngineConfigValidationResult* result) {
+UPSCLR_API void upsclr_plugin_free_validation_result(const UpsclrEngineConfigValidationResult* result) {
     std::shared_lock lk(g_mutex);
     std::lock_guard storage_lk(g_validation_results_mutex);
 
@@ -676,7 +676,7 @@ UPSCLR_API void upsclr_plugin_destroy_engine_instance(UpsclrEngineInstance* inst
     g_engine_instance_map.erase(instance);
 }
 
-UPSCLR_API UpsclrErrorCode upsclr_preload_upscale(UpsclrEngineInstance* instance, int32_t scale) {
+UPSCLR_API UpsclrErrorCode upsclr_plugin_preload_upscale(UpsclrEngineInstance* instance, int32_t scale) {
     std::shared_lock lk(g_mutex);
     std::shared_lock storage_lk(g_engine_instances_mutex);
 
@@ -697,7 +697,7 @@ UPSCLR_API UpsclrErrorCode upsclr_preload_upscale(UpsclrEngineInstance* instance
     }
 }
 
-UPSCLR_API UpsclrErrorCode upsclr_upscale(
+UPSCLR_API UpsclrErrorCode upsclr_plugin_upscale(
     UpsclrEngineInstance* instance,
     int32_t scale,
     const unsigned char* in_data,

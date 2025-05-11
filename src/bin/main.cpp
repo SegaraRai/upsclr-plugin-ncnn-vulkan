@@ -129,7 +129,7 @@ class PluginManager final {
             return UPSCLR_ERROR_ENGINE_NOT_FOUND;
         }
 
-        return upsclr_preload_upscale(instance.get(), scale);
+        return upsclr_plugin_preload_upscale(instance.get(), scale);
     }
 
     UpsclrErrorCode process(void* in_data, int in_width, int in_height, int in_channels, void* out_data, int out_width, int out_height, int out_channels, int scale, UpsclrColorFormat in_format, UpsclrColorFormat out_format) {
@@ -137,7 +137,7 @@ class PluginManager final {
             return UPSCLR_ERROR_ENGINE_NOT_FOUND;
         }
 
-        return upsclr_upscale(
+        return upsclr_plugin_upscale(
             instance.get(),
             scale,
             static_cast<const unsigned char*>(in_data),

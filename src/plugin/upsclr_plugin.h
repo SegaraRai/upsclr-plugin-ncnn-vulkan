@@ -127,14 +127,14 @@ UPSCLR_API const UpsclrEngineInfo* upsclr_plugin_get_engine_info(size_t engine_i
  * @param config_json_length Length of the configuration string in bytes
  * @return Pointer to a structure containing validation results. Must be freed with `upsclr_free_validation_result` after use.
  */
-UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_config(size_t engine_index, const char8_t* config_json, size_t config_json_length);
+UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_plugin_validate_engine_config(size_t engine_index, const char8_t* config_json, size_t config_json_length);
 
 /**
  * @brief Free memory allocated for validation results
  *
  * @param result Validation result obtained from upsclr_validate_engine_config
  */
-UPSCLR_API void upsclr_free_validation_result(const UpsclrEngineConfigValidationResult* result);
+UPSCLR_API void upsclr_plugin_free_validation_result(const UpsclrEngineConfigValidationResult* result);
 
 /**
  * @brief Create an engine instance
@@ -160,7 +160,7 @@ UPSCLR_API void upsclr_plugin_destroy_engine_instance(UpsclrEngineInstance* inst
  * @param scale Scale factor
  * @return Error code indicating the result
  */
-UPSCLR_API UpsclrErrorCode upsclr_preload_upscale(UpsclrEngineInstance* instance, int32_t scale);
+UPSCLR_API UpsclrErrorCode upsclr_plugin_preload_upscale(UpsclrEngineInstance* instance, int32_t scale);
 
 /**
  * @brief Perform image upscaling
@@ -184,7 +184,7 @@ UPSCLR_API UpsclrErrorCode upsclr_preload_upscale(UpsclrEngineInstance* instance
  * @param out_color_format Color format of output image
  * @return Error code indicating the result
  */
-UPSCLR_API UpsclrErrorCode upsclr_upscale(UpsclrEngineInstance* instance, int32_t scale, const unsigned char* in_data, size_t in_size, uint32_t in_width, uint32_t in_height, uint32_t in_channels, UpsclrColorFormat in_color_format, unsigned char* out_data, size_t out_size, UpsclrColorFormat out_color_format);
+UPSCLR_API UpsclrErrorCode upsclr_plugin_upscale(UpsclrEngineInstance* instance, int32_t scale, const unsigned char* in_data, size_t in_size, uint32_t in_width, uint32_t in_height, uint32_t in_channels, UpsclrColorFormat in_color_format, unsigned char* out_data, size_t out_size, UpsclrColorFormat out_color_format);
 
 #ifdef __cplusplus
 }
