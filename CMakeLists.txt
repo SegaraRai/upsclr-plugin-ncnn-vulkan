@@ -74,7 +74,6 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 if(OPENMP_FOUND)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif()
 
 # enable global link time optimization
@@ -174,6 +173,14 @@ target_include_directories(upsclr-ncnn-vulkan PRIVATE ${Stb_INCLUDE_DIR})
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE upsclr-plugin-ncnn-vulkan)
+
+target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE SPDLOG_USE_STD_FORMAT)
+target_compile_definitions(upsclr-ncnn-vulkan PRIVATE SPDLOG_USE_STD_FORMAT)
+
+if(OPENMP_FOUND)
+    target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
+    target_link_libraries(upsclr-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
+endif()
 
 # UTF-8 support for Windows
 if(WIN32)

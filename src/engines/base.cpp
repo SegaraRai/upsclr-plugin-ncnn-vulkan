@@ -1,8 +1,6 @@
 // Super-resolution base class implementation
 #include "base.hpp"
 
-#include "fmt/xchar.h"
-
 #include <algorithm>
 #include <stdexcept>
 #include <vector>
