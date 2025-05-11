@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -48,7 +49,6 @@ struct EngineConfigEx : public SuperResolutionEngineConfig {
 
 // Define the UpsclrEngineInstance struct
 struct UpsclrEngineInstance final {
-    std::mutex mutex;
     std::unique_ptr<SuperResolutionEngine> engine;
     EngineConfigEx engine_config;
 };
@@ -101,7 +101,9 @@ struct UpsclrEngineInfoRAII final {
 };
 
 // Global mutex
-std::mutex g_mutex;
+std::shared_mutex g_mutex;
+std::mutex g_validation_results_mutex;
+std::shared_mutex g_engine_instances_mutex;
 
 // Storage for validation results
 std::unordered_map<const UpsclrEngineConfigValidationResult*, std::unique_ptr<UpsclrEngineConfigValidationResult, std::function<void(UpsclrEngineConfigValidationResult*)>>> g_validation_result_map;
@@ -517,7 +519,7 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_conf
     size_t engine_index,
     const char8_t* config_json,
     size_t config_json_length) {
-    std::lock_guard lk(g_mutex);
+    std::shared_lock lk(g_mutex);
 
     const auto& registry = EngineAdapterRegistry::instance();
     const auto adapter = registry.get_adapter(engine_index);
@@ -582,6 +584,8 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_conf
     }
 
     // Store in global storage
+    std::lock_guard storage_lk(g_validation_results_mutex);
+
     const auto* ptr_result = result.get();
     g_validation_result_map.emplace(ptr_result, std::move(result));
 
@@ -589,7 +593,8 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_conf
 }
 
 UPSCLR_API void upsclr_free_validation_result(const UpsclrEngineConfigValidationResult* result) {
-    std::lock_guard lk(g_mutex);
+    std::shared_lock lk(g_mutex);
+    std::lock_guard storage_lk(g_validation_results_mutex);
 
     g_validation_result_map.erase(result);
 }
@@ -598,7 +603,7 @@ UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
     size_t engine_index,
     const char8_t* config_json,
     size_t config_json_length) {
-    std::lock_guard lk(g_mutex);
+    std::shared_lock lk(g_mutex);
 
     const auto logger_error = spdlog::stderr_color_mt("stderr");
 
@@ -635,6 +640,8 @@ UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
     instance->engine = std::move(engine);
     instance->engine_config = engine_config;
 
+    std::lock_guard storage_lk(g_engine_instances_mutex);
+
     auto* ptr_instance = instance.get();
     g_engine_instance_map.emplace(ptr_instance, std::move(instance));
 
@@ -642,19 +649,19 @@ UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
 }
 
 UPSCLR_API void upsclr_plugin_destroy_engine_instance(UpsclrEngineInstance* instance) {
-    std::lock_guard lk(g_mutex);
+    std::shared_lock lk(g_mutex);
+    std::lock_guard storage_lk(g_engine_instances_mutex);
 
     g_engine_instance_map.erase(instance);
 }
 
 UPSCLR_API UpsclrErrorCode upsclr_preload_upscale(UpsclrEngineInstance* instance, int32_t scale) {
-    std::lock_guard lk(g_mutex);
+    std::shared_lock lk(g_mutex);
+    std::shared_lock storage_lk(g_engine_instances_mutex);
 
     if (instance == nullptr || instance->engine == nullptr || scale < 1) {
         return UPSCLR_ERROR_INVALID_ARGUMENT;
     }
-
-    std::lock_guard instance_lk(instance->mutex);
 
     try {
         const auto result = instance->engine->preload(scale);
@@ -681,7 +688,8 @@ UPSCLR_API UpsclrErrorCode upsclr_upscale(
     unsigned char* out_data,
     size_t out_size,
     UpsclrColorFormat out_color_format) {
-    std::lock_guard lk(g_mutex);
+    std::shared_lock lk(g_mutex);
+    std::shared_lock storage_lk(g_engine_instances_mutex);
 
     // Validate arguments
     if (instance == nullptr || instance->engine == nullptr || in_data == nullptr || out_data == nullptr || scale < 1) {
@@ -696,8 +704,6 @@ UPSCLR_API UpsclrErrorCode upsclr_upscale(
     if (out_size != in_width * in_height * in_channels * scale * scale) {
         return UPSCLR_ERROR_INVALID_ARGUMENT;
     }
-
-    std::lock_guard instance_lk(instance->mutex);
 
     try {
         ncnn::Mat in(static_cast<int>(in_width), static_cast<int>(in_height), const_cast<unsigned char*>(in_data), static_cast<size_t>(in_channels), static_cast<int>(in_channels));
