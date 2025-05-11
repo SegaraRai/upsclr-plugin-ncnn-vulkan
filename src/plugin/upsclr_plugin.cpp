@@ -1,11 +1,13 @@
 /**
  * @file upsclr_plugin.cpp
- * @brief Implementation of the plugin DLL API for upsclr-ncnn-vulkan-plugin.
+ * @brief Implementation of the plugin DLL API for upsclr-plugin-ncnn-vulkan.
  */
 
 #include "upsclr_plugin.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -57,7 +59,20 @@ namespace {
 // Global storage for dynamically allocated objects
 
 char8_t* u8dup(const char8_t* str) {
-    return reinterpret_cast<char8_t*>(strdup(reinterpret_cast<const char*>(str)));
+    if (str == nullptr) {
+        return nullptr;
+    }
+    const auto size = std::strlen(reinterpret_cast<const char*>(str)) + 1;
+    auto memory = std::malloc(size);
+    if (memory == nullptr) {
+        return nullptr;
+    }
+    std::memcpy(memory, str, size);
+    return reinterpret_cast<char8_t*>(memory);
+}
+
+void free_u8(char8_t* str) {
+    std::free(str);
 }
 
 struct UpsclrEngineInfoRAII final {
@@ -71,10 +86,10 @@ struct UpsclrEngineInfoRAII final {
     }
 
     ~UpsclrEngineInfoRAII() {
-        free(const_cast<char8_t*>(info.name));
-        free(const_cast<char8_t*>(info.description));
-        free(const_cast<char8_t*>(info.version));
-        free(const_cast<char8_t*>(info.config_json_schema));
+        free_u8(const_cast<char8_t*>(info.name));
+        free_u8(const_cast<char8_t*>(info.description));
+        free_u8(const_cast<char8_t*>(info.version));
+        free_u8(const_cast<char8_t*>(info.config_json_schema));
     }
 
     UpsclrEngineInfoRAII(const UpsclrEngineInfoRAII&) = delete;
@@ -113,7 +128,7 @@ std::unordered_map<UpsclrEngineInstance*, std::unique_ptr<UpsclrEngineInstance>>
 
 // Plugin information
 const UpsclrPluginInfo g_plugin_info = {
-    .name = u8"upsclr-ncnn-vulkan-plugin",
+    .name = u8"upsclr-plugin-ncnn-vulkan",
     .version = u8"1.0.0",
     .description = u8"Image upscaling plugin using CNN-based super-resolution engines backed by ncnn and Vulkan",
 };
@@ -298,7 +313,7 @@ class RealESRGANAdapter final : public EngineAdapter {
         const auto& config = parsed_config.value();
         return EngineConfigEx{
             {
-                .model_dir = std::filesystem::u8path(config.model_dir),
+                .model_dir = std::filesystem::path(config.model_dir),
                 .model = config.model,
                 .gpu_id = config.gpu_id,
                 .tta_mode = config.tta_mode,
@@ -386,7 +401,7 @@ class RealCUGANAdapter final : public EngineAdapter {
         const auto& config = parsed_config.value();
         return EngineConfigEx{
             {
-                .model_dir = std::filesystem::u8path(config.model_dir),
+                .model_dir = std::filesystem::path(config.model_dir),
                 .model = config.model,
                 .gpu_id = config.gpu_id,
                 .tta_mode = config.tta_mode,
@@ -468,6 +483,12 @@ namespace {
 void initialize_all() {
     std::lock_guard lk(g_mutex);
 
+    {
+        auto stderr_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+        auto stderr_logger = std::make_shared<spdlog::logger>("upsclr-plugin-ncnn-vulkan", std::move(stderr_sink));
+        spdlog::register_logger(std::move(stderr_logger));
+    }
+
     ncnn::create_gpu_instance();
 
     const auto& registry = EngineAdapterRegistry::instance();
@@ -542,14 +563,14 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_validate_engine_conf
 
             if (ptr->error_messages) {
                 for (size_t i = 0; i < ptr->error_count; ++i) {
-                    free((void*)ptr->error_messages[i]);
+                    free_u8(const_cast<char8_t*>(ptr->error_messages[i]));
                 }
                 delete[] ptr->error_messages;
             }
 
             if (ptr->warning_messages) {
                 for (size_t i = 0; i < ptr->warning_count; ++i) {
-                    free((void*)ptr->warning_messages[i]);
+                    free_u8(const_cast<char8_t*>(ptr->warning_messages[i]));
                 }
                 delete[] ptr->warning_messages;
             }
@@ -605,7 +626,7 @@ UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
     size_t config_json_length) {
     std::shared_lock lk(g_mutex);
 
-    const auto logger_error = spdlog::stderr_color_mt("stderr");
+    const auto logger_error = spdlog::get("upsclr-plugin-ncnn-vulkan");
 
     const auto& registry = EngineAdapterRegistry::instance();
     const auto adapter = registry.get_adapter(engine_index);
@@ -666,13 +687,13 @@ UPSCLR_API UpsclrErrorCode upsclr_preload_upscale(UpsclrEngineInstance* instance
     try {
         const auto result = instance->engine->preload(scale);
         if (result != 0) {
-            return UPSCLR_ERROR_UPSCALE_FAILED;
+            return UPSCLR_ERROR_PRELOAD_FAILED;
         }
 
         return UPSCLR_SUCCESS;
     } catch (...) {
         // Log error if needed
-        return UPSCLR_ERROR_UPSCALE_FAILED;
+        return UPSCLR_ERROR_PRELOAD_FAILED;
     }
 }
 

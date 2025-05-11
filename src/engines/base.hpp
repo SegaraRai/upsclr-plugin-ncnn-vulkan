@@ -282,7 +282,7 @@ struct ProcessConfig {
 };
 
 // Bicubic layers management
-class BicubicLayers {
+class BicubicLayers final {
    public:
     BicubicLayers(ncnn::VulkanDevice* vkdev, const ncnn::Option& opt);
     ~BicubicLayers() = default;
@@ -297,7 +297,7 @@ class BicubicLayers {
 };
 
 // Combined pipeline structure for preprocessing and postprocessing
-struct SuperResolutionPipelines {
+struct SuperResolutionPipelines final {
     ncnn::Pipeline preprocess_rgb;
     ncnn::Pipeline preprocess_bgr;
     ncnn::Pipeline postprocess_rgb;
@@ -307,63 +307,45 @@ struct SuperResolutionPipelines {
     ~SuperResolutionPipelines() = default;
 
     SuperResolutionPipelines(const SuperResolutionPipelines&) = delete;
-    SuperResolutionPipelines(SuperResolutionPipelines&&) = default;
 
     SuperResolutionPipelines& operator=(const SuperResolutionPipelines&) = delete;
-    SuperResolutionPipelines& operator=(SuperResolutionPipelines&&) = default;
 };
 
 // Pipeline cache
-class PipelineCache {
+class PipelineCache final {
+    // Key: scale, Value: pipeline structure
+    mutable std::unordered_map<int, std::shared_ptr<SuperResolutionPipelines>> pipelines;
+
+    // Factory function for creating pipelines
+    std::function<std::shared_ptr<SuperResolutionPipelines>(int)> pipeline_factory;
+
    public:
     PipelineCache(std::function<std::shared_ptr<SuperResolutionPipelines>(int)> factory);
 
     std::shared_ptr<SuperResolutionPipelines> get_pipelines(int scale) const;
 
     void clear();
-
-   private:
-    // Key: scale, Value: pipeline structure
-    mutable std::unordered_map<int, std::shared_ptr<SuperResolutionPipelines>> pipelines;
-
-    // Factory function for creating pipelines
-    std::function<std::shared_ptr<SuperResolutionPipelines>(int)> pipeline_factory;
 };
 
 // Net cache
 // This is required since some engines use different models for different scales
-class NetCache {
+class NetCache final {
+    // Key: scale, Value: net structure
+    mutable std::unordered_map<int, std::shared_ptr<ncnn::Net>> nets;
+
+    // Factory function for creating nets
+    std::function<std::shared_ptr<ncnn::Net>(int)> net_factory;
+
    public:
     NetCache(std::function<std::shared_ptr<ncnn::Net>(int)> factory);
 
     std::shared_ptr<ncnn::Net> get_net(int scale) const;
 
     void clear();
-
-   private:
-    // Key: scale, Value: net structure
-    mutable std::unordered_map<int, std::shared_ptr<ncnn::Net>> nets;
-
-    // Factory function for creating nets
-    std::function<std::shared_ptr<ncnn::Net>(int)> net_factory;
 };
 
 // Base class for super-resolution engines
 class SuperResolutionEngine {
-   public:
-    // Constructor and destructor
-    SuperResolutionEngine(const SuperResolutionEngineConfig& config);
-    virtual ~SuperResolutionEngine();
-
-    virtual const SuperResolutionEngineInfo& engine_info() const = 0;
-
-    virtual int preload(int scale) const;
-
-    // Image processing
-    virtual int process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const;
-
-    virtual int get_default_tile_size() const = 0;
-
    protected:
     // Configuration
     SuperResolutionEngineConfig config;
@@ -397,6 +379,20 @@ class SuperResolutionEngine {
     int net_load_param(ncnn::Net& net, const std::filesystem::path& path) const;
 
     int net_load_model_and_param(ncnn::Net& net, const std::filesystem::path& path) const;
+
+   public:
+    // Constructor and destructor
+    SuperResolutionEngine(const SuperResolutionEngineConfig& config);
+    virtual ~SuperResolutionEngine();
+
+    virtual const SuperResolutionEngineInfo& engine_info() const = 0;
+
+    virtual int preload(int scale) const;
+
+    // Image processing
+    virtual int process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const;
+
+    virtual int get_default_tile_size() const = 0;
 };
 
 #endif  // SUPER_RESOLUTION_BASE_HPP

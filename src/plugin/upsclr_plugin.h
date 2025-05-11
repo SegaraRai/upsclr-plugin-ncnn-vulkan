@@ -83,7 +83,8 @@ typedef enum UpsclrErrorCode {
     UPSCLR_SUCCESS = 0,                /**< Success */
     UPSCLR_ERROR_INVALID_ARGUMENT = 1, /**< Invalid argument */
     UPSCLR_ERROR_ENGINE_NOT_FOUND = 2, /**< Engine not found */
-    UPSCLR_ERROR_UPSCALE_FAILED = 3,   /**< Upscale operation failed */
+    UPSCLR_ERROR_PRELOAD_FAILED = 3,   /**< Preload operation failed */
+    UPSCLR_ERROR_UPSCALE_FAILED = 4,   /**< Upscale operation failed */
     UPSCLR_ERROR_OTHER = 9999,         /**< Other error */
 } UpsclrErrorCode;
 

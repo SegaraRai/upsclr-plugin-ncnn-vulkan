@@ -3,6 +3,7 @@
 #include <clocale>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <iostream>
@@ -390,7 +391,7 @@ void load(const LoadThreadParams& ltp) {
         v.out_image.w = w * scale;
         v.out_image.h = h * scale;
         v.out_image.c = c;
-        v.out_image.data = malloc(w * scale * h * scale * c);
+        v.out_image.data = std::malloc(w * scale * h * scale * c);
 
         v.scale = scale;
 
@@ -469,10 +470,10 @@ void save(const SaveThreadParams& stp) {
         // Free input pixel data
         {
             if (v.webp == 1) {
-                free(v.in_image.data);
+                std::free(v.in_image.data);
             } else {
 #if _WIN32
-                free(v.in_image.data);
+                std::free(v.in_image.data);
 #else
                 stbi_image_free(v.in_image.data);
 #endif
@@ -508,7 +509,7 @@ void save(const SaveThreadParams& stp) {
         }
 
         // Free output image memory
-        free(v.out_image.data);
+        std::free(v.out_image.data);
 
         if (success) {
             if (verbose) {
@@ -568,7 +569,7 @@ int main(int argc, char** argv) {
     const auto logger_error = spdlog::stderr_color_mt("stderr");
 
     // Parse command line arguments
-    cxxopts::Options options("upsclr-ncnn-vulkan-2", "Image super-resolution using upsclr-plugin-ncnn-vulkan");
+    cxxopts::Options options("upsclr-ncnn-vulkan", "Image super-resolution using upsclr-plugin-ncnn-vulkan");
 
     options.add_options()                                                                                                    //
         ("h,help", "Show this help")                                                                                         //
@@ -684,6 +685,8 @@ int main(int argc, char** argv) {
         gpu_id.push_back(DEFAULT_GPU_DEVICE_ID_PLACEHOLDER);
     }
 
+    const auto expected_gpu_related_item_count = gpu_id.size() > 1 ? std::format("1 or {}", gpu_id.size()) : "1";
+
     if (tile_size.empty()) {
         if (verbose) {
             logger_info->info("No tile_size specified, using default tile_size 0");
@@ -704,7 +707,7 @@ int main(int argc, char** argv) {
     }
 
     if (tile_size.size() != 1 && tile_size.size() != gpu_id.size()) {
-        logger_error->error("Invalid tile_size: expected 1 or {} tile_size, got {}", gpu_id.size(), tile_size.size());
+        logger_error->error("Invalid tile_size: expected {} tile_size, got {}", expected_gpu_related_item_count, tile_size.size());
         return -1;
     }
 
@@ -726,7 +729,7 @@ int main(int argc, char** argv) {
     }
 
     if (jobs_proc.size() != 1 && jobs_proc.size() != gpu_id.size()) {
-        logger_error->error("Invalid jobs_proc: expected 1 or {} jobs_proc, got {}", gpu_id.size(), jobs_proc.size());
+        logger_error->error("Invalid jobs_proc: expected {} jobs_proc, got {}", expected_gpu_related_item_count, jobs_proc.size());
         return -1;
     }
 
