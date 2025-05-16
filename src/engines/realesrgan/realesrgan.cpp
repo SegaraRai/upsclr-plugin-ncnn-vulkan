@@ -1,6 +1,7 @@
 #include "realesrgan.hpp"
 
 #include "../../encoding_utils.hpp"
+#include "../check_result.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -84,13 +85,15 @@ struct Tile {
     int y1;
 };
 
-void extract_features(ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd);
+int extract_features(const std::shared_ptr<spdlog::logger>& logger_error, ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd);
 void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat& in_tile_gpu, ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
 void preprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat in_tile_gpu[8], ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
 void postprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu_row, ncnn::VkMat& out_tile_gpu, ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
 void postprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu_row, ncnn::VkMat out_tile_gpu[8], ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
 
 }  // namespace
+
+#define CHECK_NCNN_RESULT(expr) CHECK_NCNN_RESULT_AND_LOG(this->config.logger_error, expr)
 
 RealESRGAN::RealESRGAN(const SuperResolutionEngineConfig& config)
     : SuperResolutionEngine(config) {
@@ -159,7 +162,9 @@ std::shared_ptr<ncnn::Net> RealESRGAN::create_net(int scale, const NetCache& net
     }
 
     auto net = this->create_net_base();
-    this->net_load_model_and_param(*net, this->config.model_dir / (basename + u8".param"));
+    if (this->net_load_model_and_param(*net, this->config.model_dir / (basename + u8".param")) != 0) {
+        return nullptr;
+    }
 
     return net;
 }
@@ -288,15 +293,17 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
     const auto& pipelines = *ptr_pipelines;
 
     // Create allocators
-    ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
+    const VkAllocators allocators(this->vkdev);
+
+    const auto blob_vkallocator = allocators.get_blob_allocator();
     if (blob_vkallocator == nullptr) {
         this->config.logger_error->error("[{}] Failed to acquire blob allocator", __func__);
         return -1;
     }
-    ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
+
+    const auto staging_vkallocator = allocators.get_staging_allocator();
     if (staging_vkallocator == nullptr) {
         this->config.logger_error->error("[{}] Failed to acquire staging allocator", __func__);
-        vkdev->reclaim_blob_allocator(blob_vkallocator);
         return -1;
     }
 
@@ -339,7 +346,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
 
         cmd.record_clone(in_cpu_row, in_gpu_row, opt);
         if (xtiles > 1) {
-            cmd.submit_and_wait();
+            CHECK_NCNN_RESULT(cmd.submit_and_wait());
             cmd.reset();
         }
 
@@ -394,12 +401,12 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
 
                 // Process with neural network
                 ncnn::VkMat out_tile_gpu;
-                extract_features(*ptr_net, opt, in_tile_gpu, out_tile_gpu, cmd);
+                CHECK_NCNN_RESULT(extract_features(this->config.logger_error, *ptr_net, opt, in_tile_gpu, out_tile_gpu, cmd));
 
                 // Handle alpha channel
                 ncnn::VkMat out_alpha_tile_gpu;
                 if (channels == 4) {
-                    this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt);
+                    CHECK_NCNN_RESULT(this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt));
                 }
 
                 // Postprocess
@@ -417,16 +424,16 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
                 // Process with neural network
                 ncnn::VkMat out_tile_gpu[8];
                 for (int ti = 0; ti < 8; ti++) {
-                    extract_features(*ptr_net, opt, in_tile_gpu[ti], out_tile_gpu[ti], cmd);
+                    CHECK_NCNN_RESULT(extract_features(this->config.logger_error, *ptr_net, opt, in_tile_gpu[ti], out_tile_gpu[ti], cmd));
 
-                    cmd.submit_and_wait();
+                    CHECK_NCNN_RESULT(cmd.submit_and_wait());
                     cmd.reset();
                 }
 
                 // Handle alpha channel
                 ncnn::VkMat out_alpha_tile_gpu;
                 if (channels == 4) {
-                    this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt);
+                    CHECK_NCNN_RESULT(this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt));
                 }
 
                 // Postprocess with TTA
@@ -435,7 +442,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
             }
 
             if (xtiles > 1) {
-                cmd.submit_and_wait();
+                CHECK_NCNN_RESULT(cmd.submit_and_wait());
                 cmd.reset();
             }
         }
@@ -448,7 +455,7 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
         }
 
         cmd.record_clone(out_gpu_row, out_cpu_row, opt);
-        cmd.submit_and_wait();
+        CHECK_NCNN_RESULT(cmd.submit_and_wait());
 
         // Copy to output image
         if (storage_mode != StorageMode::FP16_INT8) {
@@ -458,24 +465,22 @@ int RealESRGAN::process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Ma
         }
     }
 
-    // Reclaim allocators
-    vkdev->reclaim_blob_allocator(blob_vkallocator);
-    vkdev->reclaim_staging_allocator(staging_vkallocator);
-
     return 0;
 }
 
 namespace {
 
-void extract_features(ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd) {
+int extract_features(const std::shared_ptr<spdlog::logger>& logger_error, ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd) {
     ncnn::Extractor ex = net.create_extractor();
 
     ex.set_blob_vkallocator(options.blob_vkallocator);
     ex.set_workspace_vkallocator(options.workspace_vkallocator);
     ex.set_staging_vkallocator(options.staging_vkallocator);
 
-    ex.input("data", in_tile);
-    ex.extract("output", out_tile, cmd);
+    CHECK_NCNN_RESULT_AND_LOG(logger_error, ex.input("data", in_tile));
+    CHECK_NCNN_RESULT_AND_LOG(logger_error, ex.extract("output", out_tile, cmd));
+
+    return 0;
 }
 
 void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat& in_tile_gpu, ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {

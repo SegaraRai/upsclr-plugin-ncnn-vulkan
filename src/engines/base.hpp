@@ -281,19 +281,35 @@ struct ProcessConfig {
     int tile_size = 0;  // All engines
 };
 
+// ncnn Vulkan allocators management
+class VkAllocators final {
+    ncnn::VulkanDevice* vkdev;
+    std::unique_ptr<ncnn::VkAllocator, std::function<void(ncnn::VkAllocator*)>> blob_vkallocator_ptr;
+    std::unique_ptr<ncnn::VkAllocator, std::function<void(ncnn::VkAllocator*)>> staging_vkallocator_ptr;
+
+   public:
+    VkAllocators(ncnn::VulkanDevice* vkdev);
+    ~VkAllocators() = default;
+
+    VkAllocators(VkAllocators&&) = default;
+    VkAllocators& operator=(VkAllocators&&) = default;
+
+    ncnn::VkAllocator* get_blob_allocator() const;
+    ncnn::VkAllocator* get_staging_allocator() const;
+};
+
 // Bicubic layers management
 class BicubicLayers final {
+    std::unordered_map<int, std::shared_ptr<ncnn::Layer>> bicubics;
+
+    ncnn::VulkanDevice* vkdev;
+    ncnn::Option opt;
+
    public:
     BicubicLayers(ncnn::VulkanDevice* vkdev, const ncnn::Option& opt);
     ~BicubicLayers() = default;
 
     std::shared_ptr<ncnn::Layer> get_bicubic(int scale) const;
-
-   private:
-    std::unordered_map<int, std::shared_ptr<ncnn::Layer>> bicubics;
-
-    ncnn::VulkanDevice* vkdev;
-    ncnn::Option opt;
 };
 
 // Combined pipeline structure for preprocessing and postprocessing
@@ -313,6 +329,8 @@ struct SuperResolutionPipelines final {
 
 // Pipeline cache
 class PipelineCache final {
+    mutable std::mutex mutex;
+
     // Key: scale, Value: pipeline structure
     mutable std::unordered_map<int, std::shared_ptr<SuperResolutionPipelines>> pipelines;
 
@@ -330,6 +348,8 @@ class PipelineCache final {
 // Net cache
 // This is required since some engines use different models for different scales
 class NetCache final {
+    mutable std::mutex mutex;
+
     // Key: scale, Value: net structure
     mutable std::unordered_map<int, std::shared_ptr<ncnn::Net>> nets;
 

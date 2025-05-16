@@ -1,6 +1,7 @@
 #include "realcugan.hpp"
 
 #include "../../encoding_utils.hpp"
+#include "../check_result.hpp"
 
 #include "ncnn/cpu.h"
 
@@ -133,16 +134,21 @@ class FeatureCache {
         cache.clear();
     }
 
-    void load(int yi, int xi, int ti, const std::string& name, T& feat) {
-        feat = cache[make_key(yi, xi, ti, name)];
+    int load(int yi, int xi, int ti, const std::string& name, T& feat) {
+        const auto itr = cache.find(make_key(yi, xi, ti, name));
+        if (itr != cache.end()) {
+            feat = itr->second;
+            return 0;
+        }
+        return -1;
     }
 
     void save(int yi, int xi, int ti, const std::string& name, T& feat) {
-        cache[make_key(yi, xi, ti, name)] = feat;
+        cache.emplace(make_key(yi, xi, ti, name), feat);
     }
 };
 
-void extract_features(ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd);
+int extract_features(const std::shared_ptr<spdlog::logger>& logger_error, ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd);
 void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat& in_tile_gpu, ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
 void preprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat in_tile_gpu[8], ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
 void postprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& out_gpu_row, ncnn::VkMat& out_tile_gpu, ncnn::VkMat& out_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, int scale, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt);
@@ -155,9 +161,12 @@ void postprocess_tile_4x_tta_gpu(const SuperResolutionPipelines& pipelines, cons
 // SyncGAP GPU processing class
 
 class RealCUGANSyncGapGPU {
+#define CHECK_NCNN_RESULT(expr) CHECK_NCNN_RESULT_AND_LOG(this->logger_error, expr)
+
     static constexpr int VERY_ROUGH_TILE_SIZE = 32;
 
     ncnn::VulkanDevice* vkdev;
+    VkAllocators allocators;
     const ncnn::Net& net;
     const SuperResolutionPipelines& pipelines;
     ncnn::Option opt;
@@ -181,33 +190,30 @@ class RealCUGANSyncGapGPU {
         return names;
     }
 
-    void extract_features_sync_gap(const ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, const std::vector<std::string>& in_names, const std::vector<std::string>& out_names, FeatureCache<ncnn::VkMat>& cache, int yi, int xi, int ti, ncnn::VkCompute& cmd) {
+    int extract_features_sync_gap(const ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, const std::vector<std::string>& in_names, const std::vector<std::string>& out_names, FeatureCache<ncnn::VkMat>& cache, int yi, int xi, int ti, ncnn::VkCompute& cmd) {
         ncnn::Extractor ex = net.create_extractor();
 
         ex.set_blob_vkallocator(options.blob_vkallocator);
         ex.set_workspace_vkallocator(options.workspace_vkallocator);
         ex.set_staging_vkallocator(options.staging_vkallocator);
 
-        ex.input("in0", in_tile);
+        CHECK_NCNN_RESULT(ex.input("in0", in_tile));
 
         // Input cached features
         for (const auto& name : in_names) {
             ncnn::VkMat feat;
-            cache.load(yi, xi, ti, name, feat);
-            if (!feat.empty()) {  // Only input if feature exists in cache
-                ex.input(name.c_str(), feat);
-            } else {
-                // Handle missing input features if necessary (e.g., log warning)
-                this->logger_error->warn("[{}] Missing input feature '{}' for tile ({}, {}, {})", __func__, name, yi, xi, ti);
-            }
+            CHECK_NCNN_RESULT(cache.load(yi, xi, ti, name, feat));
+            CHECK_NCNN_RESULT(ex.input(name.c_str(), feat));
         }
 
         // Extract and save output features
         for (const auto& name : out_names) {
             ncnn::VkMat feat;
-            ex.extract(name.c_str(), feat, cmd);
+            CHECK_NCNN_RESULT(ex.extract(name.c_str(), feat, cmd));
             cache.save(yi, xi, ti, name, feat);  // Save extracted feature to cache
         }
+
+        return 0;
     }
 
     struct Stage2Options {
@@ -217,7 +223,7 @@ class RealCUGANSyncGapGPU {
     };
 
     // Helper function similar to parts of process_se_stage0/stage2
-    void process_tile_stage0_or_2(
+    int process_tile_stage0_or_2(
         int yi,
         const ncnn::VkMat& in_gpu_row,
         const std::vector<std::string>& in_names,
@@ -283,18 +289,18 @@ class RealCUGANSyncGapGPU {
 
                 ncnn::VkMat out_tile_gpu[8];  // Only first element used if !is_stage2
                 for (int ti = 0; ti < 8; ti++) {
-                    this->extract_features_sync_gap(net, opt, in_tile_gpu[ti], in_names, out_names_or_final, cache, yi, xi, ti, cmd);
+                    CHECK_NCNN_RESULT(this->extract_features_sync_gap(net, opt, in_tile_gpu[ti], in_names, out_names_or_final, cache, yi, xi, ti, cmd));
 
                     if (ptr_stage2_options != nullptr) {
                         // Load the final output "out0" which was just saved inside extract_features_sync_gap
-                        cache.load(yi, xi, ti, "out0", out_tile_gpu[ti]);
+                        CHECK_NCNN_RESULT(cache.load(yi, xi, ti, "out0", out_tile_gpu[ti]));
                     }
                 }
 
                 if (ptr_stage2_options != nullptr) {
                     ncnn::VkMat out_alpha_tile_gpu;
                     if (channels == 4) {
-                        this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt);
+                        CHECK_NCNN_RESULT(this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt));
                     }
                     if (scale == 4) {
                         postprocess_tile_4x_tta_gpu(pipelines, in_gpu_row, ptr_stage2_options->out_gpu_row, out_tile_gpu, out_alpha_tile_gpu, prepadding, channels, ptr_stage2_options->out_format, scale, tile, cmd, opt);
@@ -309,13 +315,13 @@ class RealCUGANSyncGapGPU {
                 ncnn::VkMat in_alpha_tile_gpu;
                 preprocess_tile_gpu(pipelines, in_gpu_row, in_tile_gpu, in_alpha_tile_gpu, prepadding, channels, in_format, tile, cmd, opt);
 
-                this->extract_features_sync_gap(net, opt, in_tile_gpu, in_names, out_names_or_final, cache, yi, xi, 0, cmd);
+                CHECK_NCNN_RESULT(this->extract_features_sync_gap(net, opt, in_tile_gpu, in_names, out_names_or_final, cache, yi, xi, 0, cmd));
 
                 if (ptr_stage2_options != nullptr) {
                     ncnn::VkMat out_tile_gpu;  // Only used if is_stage2
 
                     // Load the final output "out0" which was just saved inside extract_features_sync_gap
-                    cache.load(yi, xi, 0, "out0", out_tile_gpu);
+                    CHECK_NCNN_RESULT(cache.load(yi, xi, 0, "out0", out_tile_gpu));
 
                     ncnn::VkMat out_alpha_tile_gpu;
                     if (channels == 4) {
@@ -330,7 +336,7 @@ class RealCUGANSyncGapGPU {
             }
 
             if (xtiles > 1) {
-                cmd.submit_and_wait();
+                CHECK_NCNN_RESULT(cmd.submit_and_wait());
                 cmd.reset();
             }
         }  // End xi loop
@@ -347,7 +353,7 @@ class RealCUGANSyncGapGPU {
             }
 
             cmd.record_clone(ptr_stage2_options->out_gpu_row, out_tile_cpu, opt);
-            cmd.submit_and_wait();
+            CHECK_NCNN_RESULT(cmd.submit_and_wait());
 
             // Copy to output image if not directly written
             if (storage_mode != StorageMode::FP16_INT8) {
@@ -356,14 +362,15 @@ class RealCUGANSyncGapGPU {
             }
         } else {
             // Stage 0 just needs to ensure commands are finished for this yi row
-            cmd.submit_and_wait();
+            CHECK_NCNN_RESULT(cmd.submit_and_wait());
         }
 
+        return 0;
     }  // End process_tile_stage0_or_2
 
    public:
-    RealCUGANSyncGapGPU(ncnn::VulkanDevice* vkdev, const ncnn::Net& net, const SuperResolutionPipelines& pipelines, const ncnn::Option& opt, std::shared_ptr<spdlog::logger> logger_error, bool tta_mode, const ncnn::Mat& in, ColorFormat in_format, const ProcessConfig& config, std::function<int(const ncnn::VkMat& in_alpha_tile, ncnn::VkMat& out_alpha_tile, int scale, ncnn::VkCompute& cmd, const ncnn::Option& opt)> handle_alpha_channel_gpu)
-        : vkdev(vkdev), net(net), pipelines(pipelines), opt(opt), logger_error(logger_error), config(config), prepadding(get_prepadding_for_scale(config.scale)), in(in), in_format(in_format), tta_mode(tta_mode), handle_alpha_channel_gpu(handle_alpha_channel_gpu) {}
+    RealCUGANSyncGapGPU(ncnn::VulkanDevice* vkdev, VkAllocators&& allocators, const ncnn::Net& net, const SuperResolutionPipelines& pipelines, const ncnn::Option& opt, std::shared_ptr<spdlog::logger> logger_error, bool tta_mode, const ncnn::Mat& in, ColorFormat in_format, const ProcessConfig& config, std::function<int(const ncnn::VkMat& in_alpha_tile, ncnn::VkMat& out_alpha_tile, int scale, ncnn::VkCompute& cmd, const ncnn::Option& opt)> handle_alpha_channel_gpu)
+        : vkdev(vkdev), allocators(std::move(allocators)), net(net), pipelines(pipelines), opt(opt), logger_error(logger_error), config(config), prepadding(get_prepadding_for_scale(config.scale)), in(in), in_format(in_format), tta_mode(tta_mode), handle_alpha_channel_gpu(handle_alpha_channel_gpu) {}
 
     // --- Standard SE Methods ---
 
@@ -410,11 +417,10 @@ class RealCUGANSyncGapGPU {
             ncnn::VkCompute cmd_upload(vkdev);
             ncnn::VkMat in_gpu_row;
             cmd_upload.record_clone(in_cpu_row, in_gpu_row, opt);
-            cmd_upload.submit_and_wait();  // Submit upload for the row
+            CHECK_NCNN_RESULT(cmd_upload.submit_and_wait());  // Submit upload for the row
 
             // Process tiles in the row
-            this->process_tile_stage0_or_2(yi, in_gpu_row, in_names, out_names, std::nullopt);  // Stage 0, dummy args for stage2 parts
-
+            CHECK_NCNN_RESULT(this->process_tile_stage0_or_2(yi, in_gpu_row, in_names, out_names, std::nullopt));
         }  // End yi loop
 
         return 0;
@@ -446,10 +452,8 @@ class RealCUGANSyncGapGPU {
                 for (size_t i = 0; i < names.size(); i++) {
                     for (int ti = 0; ti < t_count; ti++) {
                         ncnn::VkMat feat;
-                        cache.load(yi, xi, ti, names[i], feat);
-                        if (!feat.empty()) {  // Check if load was successful
-                            feats_gpu[i].push_back(feat);
-                        }
+                        CHECK_NCNN_RESULT(cache.load(yi, xi, ti, names[i], feat));
+                        feats_gpu[i].push_back(feat);
                     }
                 }
                 if (!names.empty()) {
@@ -478,20 +482,22 @@ class RealCUGANSyncGapGPU {
                 }
             }
         }
-        cmd.submit_and_wait();
+        CHECK_NCNN_RESULT(cmd.submit_and_wait());
         cmd.reset();
 
         // 3. Calculate global average on CPU
         std::vector<ncnn::VkMat> avgfeats_gpu(names.size());
         for (size_t i = 0; i < names.size(); i++) {
-            if (feats_cpu[i].empty())
+            if (feats_cpu[i].empty()) {
                 continue;  // Skip if no features
+            }
 
             // Ensure all mats are valid before proceeding
             size_t valid_mats = 0;
             for (const auto& mat : feats_cpu[i]) {
-                if (!mat.empty())
+                if (!mat.empty()) {
                     valid_mats++;
+                }
             }
             if (valid_mats == 0) {
                 continue;  // Skip if no valid mats downloaded
@@ -554,7 +560,7 @@ class RealCUGANSyncGapGPU {
             // 4. Upload average feature to GPU
             cmd.record_upload(avgfeat, avgfeats_gpu[i], opt);
         }
-        cmd.submit_and_wait();
+        CHECK_NCNN_RESULT(cmd.submit_and_wait());
         cmd.reset();
 
         // 5. Save average feature back to cache for all tiles
@@ -618,7 +624,7 @@ class RealCUGANSyncGapGPU {
             ncnn::VkCompute cmd_upload(vkdev);
             ncnn::VkMat in_gpu_row;
             cmd_upload.record_clone(in_cpu_row, in_gpu_row, opt);
-            cmd_upload.submit_and_wait();  // Submit upload for the row
+            CHECK_NCNN_RESULT(cmd_upload.submit_and_wait());  // Submit upload for the row
 
             // Create output GPU mat for the row
             const int out_tile_y0 = std::max(yi * TILE_SIZE_Y, 0);
@@ -631,11 +637,12 @@ class RealCUGANSyncGapGPU {
             }
 
             // Process tiles in the row and download
-            this->process_tile_stage0_or_2(yi, in_gpu_row, in_names, out_names, std::make_optional(Stage2Options{
-                                                                                    .out_gpu_row = out_gpu_row,
-                                                                                    .out = out,
-                                                                                    .out_format = out_format,
-                                                                                }));
+            Stage2Options opts{
+                .out_gpu_row = out_gpu_row,
+                .out = out,
+                .out_format = out_format,
+            };
+            CHECK_NCNN_RESULT(this->process_tile_stage0_or_2(yi, in_gpu_row, in_names, out_names, opts));
 
         }  // End yi loop
         return 0;
@@ -689,7 +696,7 @@ class RealCUGANSyncGapGPU {
             ncnn::VkCompute cmd_upload(vkdev);
             ncnn::VkMat in_gpu_row;
             cmd_upload.record_clone(in_cpu_row, in_gpu_row, opt);
-            cmd_upload.submit_and_wait();
+            CHECK_NCNN_RESULT(cmd_upload.submit_and_wait());
 
             ncnn::VkCompute cmd_process(vkdev);
             // Inner loop for processing xi with step 3
@@ -723,23 +730,23 @@ class RealCUGANSyncGapGPU {
                     ncnn::VkMat in_alpha_tile_gpu;
                     preprocess_tile_tta_gpu(pipelines, in_gpu_row, in_tile_gpu, in_alpha_tile_gpu, prepadding, channels, in_format, tile, cmd_process, opt);
                     for (int ti = 0; ti < 8; ti++) {
-                        this->extract_features_sync_gap(net, opt, in_tile_gpu[ti], in_names, out_names, cache, yi, xi, ti, cmd_process);
+                        CHECK_NCNN_RESULT(this->extract_features_sync_gap(net, opt, in_tile_gpu[ti], in_names, out_names, cache, yi, xi, ti, cmd_process));
                     }
                 } else {
                     ncnn::VkMat in_tile_gpu;
                     ncnn::VkMat in_alpha_tile_gpu;
                     preprocess_tile_gpu(pipelines, in_gpu_row, in_tile_gpu, in_alpha_tile_gpu, prepadding, channels, in_format, tile, cmd_process, opt);
-                    this->extract_features_sync_gap(net, opt, in_tile_gpu, in_names, out_names, cache, yi, xi, 0, cmd_process);
+                    CHECK_NCNN_RESULT(this->extract_features_sync_gap(net, opt, in_tile_gpu, in_names, out_names, cache, yi, xi, 0, cmd_process));
                 }
 
                 if (xtiles > 1) {  // Submit per processed tile in very rough
-                    cmd_process.submit_and_wait();
+                    CHECK_NCNN_RESULT(cmd_process.submit_and_wait());
                     cmd_process.reset();
                 }
 
             }  // End xi loop (step 3)
-            cmd_process.submit_and_wait();  // Final submit for the row if needed
 
+            CHECK_NCNN_RESULT(cmd_process.submit_and_wait());  // Final submit for the row if needed
         }  // End yi loop (step 3)
 
         return 0;
@@ -773,10 +780,8 @@ class RealCUGANSyncGapGPU {
                 for (size_t i = 0; i < names.size(); i++) {
                     for (int ti = 0; ti < t_count; ti++) {
                         ncnn::VkMat feat;
-                        cache.load(yi, xi, ti, names[i], feat);  // Load only from (yi, xi)
-                        if (!feat.empty()) {
-                            feats_gpu[i].push_back(feat);
-                        }
+                        CHECK_NCNN_RESULT(cache.load(yi, xi, ti, names[i], feat));  // Load only from (yi, xi)
+                        feats_gpu[i].push_back(feat);
                     }
                 }
                 if (!names.empty()) {
@@ -806,7 +811,7 @@ class RealCUGANSyncGapGPU {
                 }
             }
         }
-        cmd.submit_and_wait();
+        CHECK_NCNN_RESULT(cmd.submit_and_wait());
         cmd.reset();
 
         // 3. Calculate global average on CPU (Same as sync_gap)
@@ -884,7 +889,7 @@ class RealCUGANSyncGapGPU {
             // 4. Upload average feature to GPU
             cmd.record_upload(avgfeat, avgfeats_gpu[i], opt);
         }
-        cmd.submit_and_wait();
+        CHECK_NCNN_RESULT(cmd.submit_and_wait());
         cmd.reset();
 
         // 5. Save average feature back to cache for *all* 9 tiles in each 3x3 block
@@ -907,7 +912,11 @@ class RealCUGANSyncGapGPU {
 
         return 0;
     }
+
+#undef CHECK_NCNN_RESULT
 };
+
+#define CHECK_NCNN_RESULT(expr) CHECK_NCNN_RESULT_AND_LOG(this->config.logger_error, expr)
 
 RealCUGAN::RealCUGAN(const SuperResolutionEngineConfig& config)
     : SuperResolutionEngine(config) {
@@ -1010,7 +1019,9 @@ std::shared_ptr<ncnn::Net> RealCUGAN::create_net(int scale, const NetCache& net_
     std::u8string model_path = get_model_path(model_name, scale, this->config.noise);
 
     auto net = this->create_net_base();
-    this->net_load_model_and_param(*net, this->config.model_dir / (model_path + u8".param"));
+    if (this->net_load_model_and_param(*net, this->config.model_dir / (model_path + u8".param")) != 0) {
+        return nullptr;
+    }
 
     return net;
 }
@@ -1189,15 +1200,17 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
     const auto& pipelines = *ptr_pipelines;
 
     // Create allocators
-    ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
+    const VkAllocators allocators(this->vkdev);
+
+    const auto blob_vkallocator = allocators.get_blob_allocator();
     if (blob_vkallocator == nullptr) {
         this->config.logger_error->error("[{}] Failed to acquire blob allocator", __func__);
         return -1;
     }
-    ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
+
+    const auto staging_vkallocator = allocators.get_staging_allocator();
     if (staging_vkallocator == nullptr) {
         this->config.logger_error->error("[{}] Failed to acquire staging allocator", __func__);
-        vkdev->reclaim_blob_allocator(blob_vkallocator);
         return -1;
     }
 
@@ -1248,7 +1261,7 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
 
         cmd.record_clone(in_cpu_row, in_gpu_row, opt);
         if (xtiles > 1) {
-            cmd.submit_and_wait();
+            CHECK_NCNN_RESULT(cmd.submit_and_wait());
             cmd.reset();
         }
 
@@ -1305,12 +1318,12 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
 
                 // Process with neural network
                 ncnn::VkMat out_tile_gpu;
-                extract_features(*ptr_net, opt, in_tile_gpu, out_tile_gpu, cmd);
+                CHECK_NCNN_RESULT(extract_features(this->config.logger_error, *ptr_net, opt, in_tile_gpu, out_tile_gpu, cmd));
 
                 // Handle alpha channel
                 ncnn::VkMat out_alpha_tile_gpu;
                 if (channels == 4) {
-                    this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt);
+                    CHECK_NCNN_RESULT(this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt));
                 }
 
                 // Postprocess
@@ -1333,13 +1346,13 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
                 // Process with neural network
                 ncnn::VkMat out_tile_gpu[8];
                 for (int ti = 0; ti < 8; ti++) {
-                    extract_features(*ptr_net, opt, in_tile_gpu[ti], out_tile_gpu[ti], cmd);
+                    CHECK_NCNN_RESULT(extract_features(this->config.logger_error, *ptr_net, opt, in_tile_gpu[ti], out_tile_gpu[ti], cmd));
                 }
 
                 // Handle alpha channel
                 ncnn::VkMat out_alpha_tile_gpu;
                 if (channels == 4) {
-                    this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt);
+                    CHECK_NCNN_RESULT(this->handle_alpha_channel_gpu(in_alpha_tile_gpu, out_alpha_tile_gpu, scale, cmd, opt));
                 }
 
                 // Postprocess with TTA
@@ -1353,7 +1366,7 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
             }
 
             if (xtiles > 1) {
-                cmd.submit_and_wait();
+                CHECK_NCNN_RESULT(cmd.submit_and_wait());
                 cmd.reset();
             }
         }
@@ -1366,7 +1379,7 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
         }
 
         cmd.record_clone(out_gpu_row, out_cpu_row, opt);
-        cmd.submit_and_wait();
+        CHECK_NCNN_RESULT(cmd.submit_and_wait());
 
         // Copy to output image
         if (storage_mode != StorageMode::FP16_INT8) {
@@ -1376,14 +1389,10 @@ int RealCUGAN::process_gpu_nose(const ncnn::Mat& in, ColorFormat in_format, ncnn
         }
     }
 
-    // Reclaim allocators
-    vkdev->reclaim_blob_allocator(blob_vkallocator);
-    vkdev->reclaim_staging_allocator(staging_vkallocator);
-
     return 0;
 }
 
-std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> RealCUGAN::create_sync_gap_gpu(const ncnn::Mat& in, ColorFormat in_format, const ProcessConfig& config) const {
+std::unique_ptr<RealCUGANSyncGapGPU> RealCUGAN::create_sync_gap_gpu(const ncnn::Mat& in, ColorFormat in_format, const ProcessConfig& config) const {
     // Get the network for the current scale
     const auto ptr_net = this->net_cache.get_net(config.scale);
     if (ptr_net == nullptr) {
@@ -1403,15 +1412,15 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
     const auto vkdev = this->vkdev;
 
     // Create allocators
-    ncnn::VkAllocator* blob_vkallocator = vkdev->acquire_blob_allocator();
+    VkAllocators allocators(this->vkdev);
+    const auto blob_vkallocator = allocators.get_blob_allocator();
     if (blob_vkallocator == nullptr) {
         this->config.logger_error->error("[{}] Failed to acquire blob allocator", __func__);
         return nullptr;
     }
-    ncnn::VkAllocator* staging_vkallocator = vkdev->acquire_staging_allocator();
+    const auto staging_vkallocator = allocators.get_staging_allocator();
     if (staging_vkallocator == nullptr) {
         this->config.logger_error->error("[{}] Failed to acquire staging allocator", __func__);
-        vkdev->reclaim_blob_allocator(blob_vkallocator);
         return nullptr;
     }
 
@@ -1420,15 +1429,7 @@ std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> 
     opt.workspace_vkallocator = blob_vkallocator;
     opt.staging_vkallocator = staging_vkallocator;
 
-    return std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>>(
-        new RealCUGANSyncGapGPU(vkdev, net, pipelines, opt, this->config.logger_error, this->config.tta_mode, in, in_format, config, std::bind(&RealCUGAN::handle_alpha_channel_gpu, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5)),
-        [vkdev, blob_vkallocator, staging_vkallocator](RealCUGANSyncGapGPU* ptr) {
-            delete ptr;
-
-            // Reclaim allocators
-            vkdev->reclaim_blob_allocator(blob_vkallocator);
-            vkdev->reclaim_staging_allocator(staging_vkallocator);
-        });
+    return std::make_unique<RealCUGANSyncGapGPU>(vkdev, std::move(allocators), net, pipelines, opt, this->config.logger_error, this->config.tta_mode, in, in_format, config, std::bind(&RealCUGAN::handle_alpha_channel_gpu, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
 }
 
 int RealCUGAN::process_gpu_se(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const {
@@ -1508,15 +1509,17 @@ int RealCUGAN::process_gpu_se_very_rough(const ncnn::Mat& in, ColorFormat in_for
 
 namespace {
 
-void extract_features(ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd) {
+int extract_features(const std::shared_ptr<spdlog::logger>& logger_error, ncnn::Net& net, const ncnn::Option& options, const ncnn::VkMat& in_tile, ncnn::VkMat& out_tile, ncnn::VkCompute& cmd) {
     ncnn::Extractor ex = net.create_extractor();
 
     ex.set_blob_vkallocator(options.blob_vkallocator);
     ex.set_workspace_vkallocator(options.workspace_vkallocator);
     ex.set_staging_vkallocator(options.staging_vkallocator);
 
-    ex.input("in0", in_tile);
-    ex.extract("out0", out_tile, cmd);
+    CHECK_NCNN_RESULT_AND_LOG(logger_error, ex.input("in0", in_tile));
+    CHECK_NCNN_RESULT_AND_LOG(logger_error, ex.extract("out0", out_tile, cmd));
+
+    return 0;
 }
 
 void preprocess_tile_gpu(const SuperResolutionPipelines& pipelines, const ncnn::VkMat& in_gpu_row, ncnn::VkMat& in_tile_gpu, ncnn::VkMat& in_alpha_tile_gpu, int prepadding, int channels, ColorFormat format, const Tile& tile, ncnn::VkCompute& cmd, const ncnn::Option& opt) {

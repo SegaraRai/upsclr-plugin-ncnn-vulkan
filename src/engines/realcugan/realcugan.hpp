@@ -56,7 +56,7 @@ class RealCUGAN final : public SuperResolutionEngine {
     int process_gpu(const ncnn::Mat& in, ColorFormat in_format, ncnn::Mat& out, ColorFormat out_format, const ProcessConfig& config) const override;
 
    private:
-    std::unique_ptr<RealCUGANSyncGapGPU, std::function<void(RealCUGANSyncGapGPU*)>> create_sync_gap_gpu(const ncnn::Mat& in, ColorFormat in_format, const ProcessConfig& config) const;
+    std::unique_ptr<RealCUGANSyncGapGPU> create_sync_gap_gpu(const ncnn::Mat& in, ColorFormat in_format, const ProcessConfig& config) const;
 
     // Helper methods for SyncGAP processing with different levels
     // Level 0: No SyncGAP processing

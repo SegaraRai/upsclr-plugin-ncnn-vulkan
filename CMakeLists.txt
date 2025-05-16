@@ -8,6 +8,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>")
 
+# Set warning level
+cmake_policy(SET CMP0092 NEW)
+add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/W4>")
+add_compile_options("$<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>")
+
 project(realesrgan-ncnn-vulkan CXX)
 
 option(USE_STATIC_MOLTENVK "link moltenvk static library" OFF)

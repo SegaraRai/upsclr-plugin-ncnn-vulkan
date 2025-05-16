@@ -2,8 +2,39 @@
 #include "base.hpp"
 
 #include <algorithm>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
+
+//------------------------------------------------------------------------------
+// VkAllocators implementation
+//------------------------------------------------------------------------------
+
+VkAllocators::VkAllocators(ncnn::VulkanDevice* vkdev) {
+    this->blob_vkallocator_ptr = std::unique_ptr<ncnn::VkAllocator, std::function<void(ncnn::VkAllocator*)>>(
+        vkdev->acquire_blob_allocator(),
+        [vkdev](ncnn::VkAllocator* allocator) {
+            if (allocator != nullptr) {
+                vkdev->reclaim_blob_allocator(allocator);
+            }
+        });
+
+    this->staging_vkallocator_ptr = std::unique_ptr<ncnn::VkAllocator, std::function<void(ncnn::VkAllocator*)>>(
+        vkdev->acquire_staging_allocator(),
+        [vkdev](ncnn::VkAllocator* allocator) {
+            if (allocator != nullptr) {
+                vkdev->reclaim_staging_allocator(allocator);
+            }
+        });
+}
+
+ncnn::VkAllocator* VkAllocators::get_blob_allocator() const {
+    return this->blob_vkallocator_ptr.get();
+}
+
+ncnn::VkAllocator* VkAllocators::get_staging_allocator() const {
+    return this->staging_vkallocator_ptr.get();
+}
 
 //------------------------------------------------------------------------------
 // BicubicLayers implementation
@@ -62,6 +93,8 @@ PipelineCache::PipelineCache(std::function<std::shared_ptr<SuperResolutionPipeli
 }
 
 std::shared_ptr<SuperResolutionPipelines> PipelineCache::get_pipelines(int scale) const {
+    std::lock_guard lk(this->mutex);
+
     const auto it = this->pipelines.find(scale);
     if (it != this->pipelines.end()) {
         return it->second;
@@ -73,6 +106,8 @@ std::shared_ptr<SuperResolutionPipelines> PipelineCache::get_pipelines(int scale
 }
 
 void PipelineCache::clear() {
+    std::lock_guard lk(this->mutex);
+
     this->pipelines.clear();
 }
 
@@ -85,6 +120,8 @@ NetCache::NetCache(std::function<std::shared_ptr<ncnn::Net>(int)> factory)
 }
 
 std::shared_ptr<ncnn::Net> NetCache::get_net(int scale) const {
+    std::lock_guard lk(this->mutex);
+
     const auto it = this->nets.find(scale);
     if (it != this->nets.end()) {
         return it->second;
@@ -96,6 +133,8 @@ std::shared_ptr<ncnn::Net> NetCache::get_net(int scale) const {
 }
 
 void NetCache::clear() {
+    std::lock_guard lk(this->mutex);
+
     this->nets.clear();
 }
 
