@@ -11,6 +11,10 @@
 //------------------------------------------------------------------------------
 
 VkAllocators::VkAllocators(ncnn::VulkanDevice* vkdev) {
+    if (vkdev == nullptr) {
+        return;
+    }
+
     this->blob_vkallocator_ptr = std::unique_ptr<ncnn::VkAllocator, std::function<void(ncnn::VkAllocator*)>>(
         vkdev->acquire_blob_allocator(),
         [vkdev](ncnn::VkAllocator* allocator) {
@@ -42,6 +46,11 @@ ncnn::VkAllocator* VkAllocators::get_staging_allocator() const {
 
 BicubicLayers::BicubicLayers(ncnn::VulkanDevice* _vkdev, const ncnn::Option& _opt)
     : vkdev(_vkdev), opt(_opt) {
+    // FIXME: support CPU?
+    if (this->vkdev == nullptr) {
+        return;
+    }
+
     // Create bicubic layers for scales 2, 3, and 4
     for (const int scale : {2, 3, 4}) {
         ncnn::Layer* layer = ncnn::create_layer("Interp");
@@ -142,9 +151,24 @@ void NetCache::clear() {
 // SuperResolutionEngine implementation
 //------------------------------------------------------------------------------
 
-SuperResolutionEngine::SuperResolutionEngine(const SuperResolutionEngineConfig& _config)
-    : config(_config),
-      vkdev(config.gpu_id >= 0 ? ncnn::get_gpu_device(config.gpu_id) : nullptr),
+ncnn::VulkanDevice* SuperResolutionEngine::get_gpu_device_or_throw(int gpu_id, const std::shared_ptr<spdlog::logger>& logger_error) {
+    if (gpu_id < 0) {
+        return nullptr;
+    }
+
+    ncnn::VulkanDevice* vkdev = ncnn::get_gpu_device(gpu_id);
+    if (vkdev == nullptr || !vkdev->is_valid()) {
+        logger_error->error("[{}] Failed to acquire Vulkan device with ID {}", __func__, gpu_id);
+        throw std::runtime_error("Failed to acquire Vulkan device");
+    }
+
+    return vkdev;
+}
+
+SuperResolutionEngine::SuperResolutionEngine(const SuperResolutionEngineInfo& _engine_info, const SuperResolutionEngineConfig& _config)
+    : engine_info(_engine_info),
+      config(_config),
+      vkdev(get_gpu_device_or_throw(config.gpu_id, config.logger_error)),
       net_cache([this](int scale) -> std::shared_ptr<ncnn::Net> {
           auto net = this->create_net(scale, this->net_cache);
           if (net == nullptr) {
@@ -166,6 +190,14 @@ SuperResolutionEngine::SuperResolutionEngine(const SuperResolutionEngineConfig& 
                          this->prepare_net_options(opt);
                          return opt;
                      })()) {
+    if (this->vkdev == nullptr && !this->engine_info.supports(SuperResolutionFeatureFlags::CPU)) {
+        this->config.logger_error->error("[{}] This engine requires a Vulkan device to run", __func__);
+        throw std::runtime_error("This engine requires a Vulkan device to run");
+    }
+
+    if (!this->engine_info.is_compatible_config(config)) {
+        this->config.logger_error->warn("[{}] Configuration may not be fully compatible with RealCUGAN engine", __func__);
+    }
 }
 
 SuperResolutionEngine::~SuperResolutionEngine() {
@@ -174,8 +206,12 @@ SuperResolutionEngine::~SuperResolutionEngine() {
     this->net_cache.clear();
 }
 
+const SuperResolutionEngineInfo& SuperResolutionEngine::get_engine_info() const {
+    return this->engine_info;
+}
+
 int SuperResolutionEngine::process(const ncnn::Mat& in, ncnn::Mat& out, const ProcessConfig& config) const {
-    if (!this->engine_info().supports_scale(config.scale)) {
+    if (!this->engine_info.supports_scale(config.scale)) {
         this->config.logger_error->error("[{}] Unsupported scale {}", __func__, config.scale);
         return -1;
     }
@@ -188,6 +224,11 @@ int SuperResolutionEngine::process(const ncnn::Mat& in, ncnn::Mat& out, const Pr
 }
 
 std::shared_ptr<ncnn::Net> SuperResolutionEngine::create_net_base() const {
+    // FIXME: support CPU?
+    if (this->vkdev == nullptr) {
+        return nullptr;
+    }
+
     auto net = std::make_shared<ncnn::Net>();
     this->prepare_net_options(net->opt);
     net->set_vulkan_device(this->vkdev);
@@ -195,7 +236,7 @@ std::shared_ptr<ncnn::Net> SuperResolutionEngine::create_net_base() const {
 }
 
 int SuperResolutionEngine::preload(int scale) const {
-    if (!this->engine_info().supports_scale(scale)) {
+    if (!this->engine_info.supports_scale(scale)) {
         this->config.logger_error->error("[{}] Unsupported scale {}", __func__, scale);
         return -1;
     }

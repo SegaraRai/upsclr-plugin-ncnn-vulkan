@@ -74,11 +74,11 @@ int list_directory(const std::filesystem::path& dir, std::vector<std::filesystem
         }
         std::ranges::sort(filepaths);
         return 0;
-    } catch (const std::filesystem::filesystem_error& e) {
+    } catch (const std::exception& error) {
 #if _WIN32
-        fwprintf(stderr, L"opendir failed %ls: %hs\n", dir.wstring().c_str(), e.what());
+        fwprintf(stderr, L"opendir failed %ls: %hs\n", dir.wstring().c_str(), error.what());
 #else
-        fprintf(stderr, "opendir failed %s: %s\n", dir.string().c_str(), e.what());
+        fprintf(stderr, "opendir failed %s: %s\n", dir.string().c_str(), error.what());
 #endif
         return -1;
     }
@@ -553,7 +553,7 @@ std::vector<int> parse_int_list(const std::string& str) {
         if (!item.empty()) {
             try {
                 result.push_back(std::stoi(item));
-            } catch (const std::exception&) {
+            } catch (...) {
                 // Skip invalid values
             }
         }

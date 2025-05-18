@@ -96,16 +96,7 @@ void postprocess_tile_tta_gpu(const SuperResolutionPipelines& pipelines, const n
 #define CHECK_NCNN_RESULT(expr) CHECK_NCNN_RESULT_AND_LOG(this->config.logger_error, expr)
 
 RealESRGAN::RealESRGAN(const SuperResolutionEngineConfig& config)
-    : SuperResolutionEngine(config) {
-    // Validate config against engine info
-    const auto& info = get_engine_info();
-    if (!info.is_compatible_config(config)) {
-        this->config.logger_error->warn("[{}] Configuration may not be fully compatible with RealESRGAN engine", __func__);
-    }
-}
-
-const SuperResolutionEngineInfo& RealESRGAN::engine_info() const {
-    return RealESRGAN::get_engine_info();
+    : SuperResolutionEngine(RealESRGAN::get_engine_info(), config) {
 }
 
 int RealESRGAN::get_default_tile_size() const {
@@ -135,14 +126,11 @@ void RealESRGAN::prepare_net_options(ncnn::Option& options) const {
 }
 
 std::shared_ptr<ncnn::Net> RealESRGAN::create_net(int scale, const NetCache& net_cache) const {
-    // Get engine info
-    const auto& info = get_engine_info();
-
     // Use default model if none specified
-    std::u8string model_name = this->config.model.empty() ? info.default_model : this->config.model;
+    std::u8string model_name = this->config.model.empty() ? this->engine_info.default_model : this->config.model;
 
     // Check if model is supported
-    if (!info.supports_model(model_name)) {
+    if (!this->engine_info.supports_model(model_name)) {
         this->config.logger_error->error("Model '{}' is not supported by RealESRGAN", utf8_to_ascii(model_name));
     }
 

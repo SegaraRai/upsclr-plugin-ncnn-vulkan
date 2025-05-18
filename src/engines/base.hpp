@@ -199,7 +199,7 @@ struct SuperResolutionEngineInfo {
     bool supports_scale(int scale) const {
         try {
             return supported_scales.test(int_to_scale(scale));
-        } catch (const std::invalid_argument&) {
+        } catch (...) {
             return false;  // Invalid scale values are not supported
         }
     }
@@ -366,7 +366,11 @@ class NetCache final {
 
 // Base class for super-resolution engines
 class SuperResolutionEngine {
+    static ncnn::VulkanDevice* get_gpu_device_or_throw(int gpu_id, const std::shared_ptr<spdlog::logger>& logger_error);
+
    protected:
+    const SuperResolutionEngineInfo engine_info;
+
     // Configuration
     SuperResolutionEngineConfig config;
 
@@ -402,10 +406,10 @@ class SuperResolutionEngine {
 
    public:
     // Constructor and destructor
-    SuperResolutionEngine(const SuperResolutionEngineConfig& config);
+    SuperResolutionEngine(const SuperResolutionEngineInfo& engine_info, const SuperResolutionEngineConfig& config);
     virtual ~SuperResolutionEngine();
 
-    virtual const SuperResolutionEngineInfo& engine_info() const = 0;
+    const SuperResolutionEngineInfo& get_engine_info() const;
 
     virtual int preload(int scale) const;
 

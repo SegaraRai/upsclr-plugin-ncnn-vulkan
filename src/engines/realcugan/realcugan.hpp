@@ -41,8 +41,6 @@ class RealCUGAN final : public SuperResolutionEngine {
     RealCUGAN(const SuperResolutionEngineConfig& config);
     virtual ~RealCUGAN() = default;
 
-    const SuperResolutionEngineInfo& engine_info() const override;
-
     int get_default_tile_size() const override;
 
    protected:

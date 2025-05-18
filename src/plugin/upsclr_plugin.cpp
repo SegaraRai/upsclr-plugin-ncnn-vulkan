@@ -67,6 +67,9 @@ struct UpsclrEngineInstance final {
 };
 
 namespace {
+
+static constexpr auto LOGGER_NAME = "upsclr-plugin-ncnn-vulkan";
+
 // Global storage for dynamically allocated objects
 
 char8_t* u8dup(const char8_t* str) {
@@ -261,8 +264,11 @@ class EngineAdapter {
     virtual std::unique_ptr<SuperResolutionEngine> create_engine(const EngineConfigEx& engine_config, std::vector<std::u8string>& errors) const {
         try {
             return SuperResolutionEngineFactory::create_engine(engine_config);
-        } catch (const std::exception& e) {
-            errors.push_back(ascii_to_utf8(std::format("Failed to create engine: {}", e.what())));
+        } catch (const std::exception& error) {
+            errors.push_back(ascii_to_utf8(std::format("Failed to create engine: {}", error.what())));
+            return nullptr;
+        } catch (...) {
+            errors.push_back(u8"Failed to create engine: unknown error");
             return nullptr;
         }
     }
@@ -498,10 +504,6 @@ class EngineAdapterRegistry final {
     }
 };
 
-namespace {
-
-}  // namespace
-
 // Plugin API implementation
 extern "C" {
 
@@ -509,6 +511,7 @@ UPSCLR_API UpsclrErrorCode upsclr_plugin_initialize() {
     std::lock_guard lk(g_mutex);
 
     if (g_plugin_state != PluginState::NOT_INITIALIZED && g_plugin_state != PluginState::DESTROYED) {
+        fprintf(stderr, "[%s] plugin already initialized", __func__);
         return UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_ALREADY_INITIALIZED;
     }
 
@@ -517,7 +520,7 @@ UPSCLR_API UpsclrErrorCode upsclr_plugin_initialize() {
 
     {
         auto stderr_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
-        auto stderr_logger = std::make_shared<spdlog::logger>("upsclr-plugin-ncnn-vulkan", std::move(stderr_sink));
+        auto stderr_logger = std::make_shared<spdlog::logger>(LOGGER_NAME, std::move(stderr_sink));
         spdlog::register_logger(std::move(stderr_logger));
     }
 
@@ -546,6 +549,8 @@ UPSCLR_API UpsclrErrorCode upsclr_plugin_shutdown() {
     std::lock_guard lk(g_mutex);
 
     if (g_plugin_state != PluginState::READY) {
+        // Logger is only available after plugin initialization
+        fprintf(stderr, "[%s] plugin not ready, call upsclr_plugin_initialize first", __func__);
         return g_plugin_state == PluginState::NOT_INITIALIZED ? UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_NOT_INITIALIZED : UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_ALREADY_DESTROYED;
     }
 
@@ -557,6 +562,8 @@ UPSCLR_API UpsclrErrorCode upsclr_plugin_shutdown() {
     g_engine_infos.clear();
 
     ncnn::destroy_gpu_instance();
+
+    spdlog::shutdown();
 
     g_plugin_state = PluginState::DESTROYED;
 
@@ -575,6 +582,7 @@ UPSCLR_API const UpsclrEngineInfo* upsclr_plugin_get_engine_info(size_t engine_i
     if (engine_index >= g_engine_infos.size()) {
         return nullptr;
     }
+
     return &g_engine_infos[engine_index].info;
 }
 
@@ -585,6 +593,8 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_plugin_validate_engi
     std::shared_lock lk(g_mutex);
 
     if (g_plugin_state != PluginState::READY) {
+        // Logger is only available after plugin initialization
+        fprintf(stderr, "[%s] plugin not ready, call upsclr_plugin_initialize first", __func__);
         return nullptr;
     }
 
@@ -661,12 +671,9 @@ UPSCLR_API const UpsclrEngineConfigValidationResult* upsclr_plugin_validate_engi
 
 UPSCLR_API void upsclr_plugin_free_validation_result(const UpsclrEngineConfigValidationResult* result) {
     std::shared_lock lk(g_mutex);
-
-    if (g_plugin_state != PluginState::READY) {
-        return;
-    }
-
     std::lock_guard storage_lk(g_validation_results_mutex);
+
+    // We don't check plugin state for this function
 
     g_validation_result_map.erase(result);
 }
@@ -678,10 +685,12 @@ UPSCLR_API UpsclrEngineInstance* upsclr_plugin_create_engine_instance(
     std::shared_lock lk(g_mutex);
 
     if (g_plugin_state != PluginState::READY) {
+        // Logger is only available after plugin initialization
+        fprintf(stderr, "[%s] plugin not ready, call upsclr_plugin_initialize first", __func__);
         return nullptr;
     }
 
-    const auto logger_error = spdlog::get("upsclr-plugin-ncnn-vulkan");
+    const auto logger_error = spdlog::get(LOGGER_NAME);
 
     const auto& registry = EngineAdapterRegistry::instance();
     const auto adapter = registry.get_adapter(engine_index);
@@ -728,6 +737,8 @@ UPSCLR_API void upsclr_plugin_destroy_engine_instance(UpsclrEngineInstance* inst
     std::shared_lock lk(g_mutex);
 
     if (g_plugin_state != PluginState::READY) {
+        // Logger is only available after plugin initialization
+        fprintf(stderr, "[%s] plugin not ready, call upsclr_plugin_initialize first", __func__);
         return;
     }
 
@@ -740,24 +751,33 @@ UPSCLR_API UpsclrErrorCode upsclr_plugin_preload_upscale(UpsclrEngineInstance* i
     std::shared_lock lk(g_mutex);
 
     if (g_plugin_state != PluginState::READY) {
+        // Logger is only available after plugin initialization
+        fprintf(stderr, "[%s] plugin not ready, call upsclr_plugin_initialize first", __func__);
         return g_plugin_state == PluginState::NOT_INITIALIZED ? UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_NOT_INITIALIZED : UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_ALREADY_DESTROYED;
     }
+
+    const auto logger_error = spdlog::get(LOGGER_NAME);
 
     std::shared_lock storage_lk(g_engine_instances_mutex);
 
     if (instance == nullptr || instance->engine == nullptr || scale < 1) {
+        logger_error->error("[{}] invalid arguments", __func__);
         return UPSCLR_ERROR_INVALID_ARGUMENT;
     }
 
     try {
         const auto result = instance->engine->preload(scale);
         if (result != 0) {
+            logger_error->error("[{}] preload failed, code = {}", __func__, result);
             return UPSCLR_ERROR_PRELOAD_FAILED;
         }
 
         return UPSCLR_SUCCESS;
+    } catch (const std::exception& error) {
+        logger_error->error("[{}] preload failed: {}", __func__, error.what());
+        return UPSCLR_ERROR_PRELOAD_FAILED;
     } catch (...) {
-        // Log error if needed
+        logger_error->error("[{}] preload failed: unknown error", __func__);
         return UPSCLR_ERROR_PRELOAD_FAILED;
     }
 }
@@ -777,22 +797,28 @@ UPSCLR_API UpsclrErrorCode upsclr_plugin_upscale(
     std::shared_lock lk(g_mutex);
 
     if (g_plugin_state != PluginState::READY) {
+        fprintf(stderr, "[%s] plugin not ready, call upsclr_plugin_initialize first", __func__);
         return g_plugin_state == PluginState::NOT_INITIALIZED ? UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_NOT_INITIALIZED : UpsclrErrorCode::UPSCLR_ERROR_PLUGIN_ALREADY_DESTROYED;
     }
+
+    const auto logger_error = spdlog::get(LOGGER_NAME);
 
     std::shared_lock storage_lk(g_engine_instances_mutex);
 
     // Validate arguments
     if (instance == nullptr || instance->engine == nullptr || in_data == nullptr || out_data == nullptr || scale < 1) {
+        logger_error->error("[{}] invalid arguments", __func__);
         return UPSCLR_ERROR_INVALID_ARGUMENT;
     }
 
     // Validate buffer sizes
     if (in_size != in_width * in_height * in_channels) {
+        logger_error->error("[{}] invalid input buffer size", __func__);
         return UPSCLR_ERROR_INVALID_ARGUMENT;
     }
 
     if (out_size != in_width * in_height * in_channels * scale * scale) {
+        logger_error->error("[{}] invalid output buffer size", __func__);
         return UPSCLR_ERROR_INVALID_ARGUMENT;
     }
 
@@ -813,12 +839,16 @@ UPSCLR_API UpsclrErrorCode upsclr_plugin_upscale(
         // Process image
         const int result = instance->engine->process(in, out, process_config);
         if (result != 0) {
+            logger_error->error("[{}] upscaling failed, code = {}", __func__, result);
             return UPSCLR_ERROR_UPSCALE_FAILED;
         }
 
         return UPSCLR_SUCCESS;
+    } catch (const std::exception& error) {
+        logger_error->error("[{}] upscaling failed: {}", __func__, error.what());
+        return UPSCLR_ERROR_UPSCALE_FAILED;
     } catch (...) {
-        // Log error if needed
+        logger_error->error("[{}] upscaling failed: unknown error", __func__);
         return UPSCLR_ERROR_UPSCALE_FAILED;
     }
 }

@@ -919,16 +919,7 @@ class RealCUGANSyncGapGPU {
 #define CHECK_NCNN_RESULT(expr) CHECK_NCNN_RESULT_AND_LOG(this->config.logger_error, expr)
 
 RealCUGAN::RealCUGAN(const SuperResolutionEngineConfig& config)
-    : SuperResolutionEngine(config) {
-    // Validate config against engine info
-    const auto& info = get_engine_info();
-    if (!info.is_compatible_config(config)) {
-        this->config.logger_error->warn("[{}] Configuration may not be fully compatible with RealCUGAN engine", __func__);
-    }
-}
-
-const SuperResolutionEngineInfo& RealCUGAN::engine_info() const {
-    return RealCUGAN::get_engine_info();
+    : SuperResolutionEngine(RealCUGAN::get_engine_info(), config) {
 }
 
 int RealCUGAN::get_default_tile_size() const {
@@ -999,19 +990,16 @@ std::u8string RealCUGAN::get_model_path(const std::u8string& model_type, int sca
 }
 
 std::shared_ptr<ncnn::Net> RealCUGAN::create_net(int scale, const NetCache& net_cache) const {
-    // Get engine info
-    const auto& info = get_engine_info();
-
     // Check if scale is supported
-    if (!info.supports_scale(scale)) {
+    if (!this->engine_info.supports_scale(scale)) {
         this->config.logger_error->warn("[{}] Scale {} is not officially supported by RealCUGAN", __func__, scale);
     }
 
     // Use default model if none specified
-    std::u8string model_name = this->config.model.empty() ? info.default_model : this->config.model;
+    std::u8string model_name = this->config.model.empty() ? this->engine_info.default_model : this->config.model;
 
     // Check if model is supported
-    if (!info.supports_model(model_name)) {
+    if (!this->engine_info.supports_model(model_name)) {
         this->config.logger_error->warn("[{}] Model '{}' is not officially supported by RealCUGAN", __func__, utf8_to_ascii(model_name));
     }
 

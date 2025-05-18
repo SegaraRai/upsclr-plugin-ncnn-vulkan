@@ -36,8 +36,6 @@ class RealESRGAN final : public SuperResolutionEngine {
     RealESRGAN(const SuperResolutionEngineConfig& config);
     virtual ~RealESRGAN() = default;
 
-    const SuperResolutionEngineInfo& engine_info() const override;
-
     int get_default_tile_size() const override;
 
    protected:
