@@ -46,8 +46,10 @@ jobs:
           & $nuget setapikey "${{ secrets.GH_PACKAGES_TOKEN }}" -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
           echo "VCPKG_BINARY_SOURCES=clear;nuget,GitHubPackages,readwrite" >> $env:GITHUB_ENV
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+      - name: Setup LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "20"
 
       - name: Setup CMake and Ninja
         uses: lukka/get-cmake@latest
