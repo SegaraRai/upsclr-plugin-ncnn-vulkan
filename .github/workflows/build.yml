@@ -83,6 +83,7 @@ jobs:
       - name: Prepare artifacts
         run: |
           mkdir artifacts
+          copy "${{ env.LLVM_PATH }}\bin\libomp.dll" "artifacts\"
           copy "build\${{ matrix.config }}\upsclr-plugin-ncnn-vulkan.dll" "artifacts\"
           copy "build\${{ matrix.config }}\upsclr-ncnn-vulkan.exe" "artifacts\"
 
