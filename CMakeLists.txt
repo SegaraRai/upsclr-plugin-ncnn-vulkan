@@ -166,6 +166,7 @@ endif()
 target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
 
 # Build the SPIR-V shaders
+add_dependencies(upsclr-plugin-ncnn-vulkan generate-spirv)
 add_dependencies(upsclr-ncnn-vulkan generate-spirv)
 
 # -- Executable target --
