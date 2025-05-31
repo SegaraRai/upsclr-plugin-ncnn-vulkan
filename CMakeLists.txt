@@ -133,6 +133,14 @@ find_package(Stb REQUIRED)
 # -- Library target --
 target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE UPSCLR_EXPORTS)
 
+target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE SPDLOG_USE_STD_FORMAT)
+
+# UTF-8 support for Windows
+if(WIN32)
+    target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
+endif()
+
+target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE ncnn)
 target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE Vulkan::Vulkan)
 target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE glaze::glaze)
@@ -163,27 +171,21 @@ if(USE_STATIC_MOLTENVK)
     )
 endif()
 
-target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
-
 # Build the SPIR-V shaders
 add_dependencies(upsclr-plugin-ncnn-vulkan generate-spirv)
-add_dependencies(upsclr-ncnn-vulkan generate-spirv)
 
 # -- Executable target --
 target_include_directories(upsclr-ncnn-vulkan PRIVATE ${Stb_INCLUDE_DIR})
 
+target_compile_definitions(upsclr-ncnn-vulkan PRIVATE SPDLOG_USE_STD_FORMAT)
+
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE WebP::webp WebP::webpdecoder WebP::webpdemux)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE spdlog::spdlog_header_only)
 target_link_libraries(upsclr-ncnn-vulkan PRIVATE upsclr-plugin-ncnn-vulkan)
 
-target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE SPDLOG_USE_STD_FORMAT)
-target_compile_definitions(upsclr-ncnn-vulkan PRIVATE SPDLOG_USE_STD_FORMAT)
-
-target_link_libraries(upsclr-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
-
 # UTF-8 support for Windows
 if(WIN32)
-    target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
     target_compile_definitions(upsclr-ncnn-vulkan PRIVATE NOMINMAX SPDLOG_WCHAR_TO_UTF8_SUPPORT)
 
     target_sources(upsclr-ncnn-vulkan PRIVATE src/bin/win_utf8.cpp)
