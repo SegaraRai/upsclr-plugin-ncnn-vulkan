@@ -24,6 +24,9 @@ jobs:
           - preset: windows-clang-x64
             arch: x64
             config: Release
+          - preset: windows-clang-x64
+            arch: x64
+            config: Debug
 
     steps:
       - name: Checkout code
@@ -80,7 +83,8 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: upsclr-plugin-ncnn-vulkan-${{ matrix.arch }}
+          name: >-
+            upsclr-plugin-ncnn-vulkan-${{ matrix.arch }}-${{ matrix.config }}
           path: artifacts/
           retention-days: 30
 
@@ -91,11 +95,17 @@ jobs:
     if: github.event_name == 'release' || github.ref == 'refs/heads/main'
 
     steps:
-      - name: Download x64 artifacts
+      - name: Download x64 Release artifacts
         uses: actions/download-artifact@v4
         with:
-          name: upsclr-plugin-ncnn-vulkan-x64
+          name: upsclr-plugin-ncnn-vulkan-x64-Release
           path: package/x64/
+
+      - name: Download x64 Debug artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: upsclr-plugin-ncnn-vulkan-x64-Debug
+          path: package/x64-debug/
 
       - name: Create release package
         run: |
