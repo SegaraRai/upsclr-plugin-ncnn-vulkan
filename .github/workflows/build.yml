@@ -1,0 +1,137 @@
+---
+name: Build and Release
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  actions: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    strategy:
+      matrix:
+        include:
+          - preset: windows-clang-x64-ci
+            arch: x64
+            config: Release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup vcpkg
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git
+          cd vcpkg
+          git checkout f26ec398c25c4980f33a50391f00a75f7ad62ef7
+          .\bootstrap-vcpkg.bat
+          echo "VCPKG_ROOT=${{ github.workspace }}\vcpkg" >> $env:GITHUB_ENV
+          echo "${{ github.workspace }}\vcpkg" >> $env:GITHUB_PATH
+
+      - name: Setup vcpkg binary caching
+        run: |
+          $nuget = & "${{ github.workspace }}\vcpkg\vcpkg.exe" fetch nuget | tail -1
+          & $nuget sources add -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" -storepasswordincleartext -name "GitHubPackages" -username "${{ github.repository_owner }}" -password "${{ secrets.GH_PACKAGES_TOKEN }}"
+          & $nuget setapikey "${{ secrets.GH_PACKAGES_TOKEN }}" -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          echo "VCPKG_BINARY_SOURCES=clear;nuget,GitHubPackages,readwrite" >> $env:GITHUB_ENV
+
+      - name: Setup LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "20"
+
+      - name: Configure OpenMP for LLVM
+        run: |
+          echo "OpenMP_ROOT=${{ env.LLVM_PATH }}" >> $env:GITHUB_ENV
+          echo "OpenMP_CXX_LIB_NAMES=libomp" >> $env:GITHUB_ENV
+          echo "OpenMP_C_LIB_NAMES=libomp" >> $env:GITHUB_ENV
+          echo "OpenMP_libomp_LIBRARY=${{ env.LLVM_PATH }}\lib\libomp.lib" >> $env:GITHUB_ENV
+
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: >-
+            ${{ runner.os }}-cmake-build-${{ matrix.preset }}-${{
+            hashFiles('CMakeLists.txt', 'src/**/*.cpp', 'src/**/*.hpp') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-build-${{ matrix.preset }}-
+            ${{ runner.os }}-cmake-build-
+
+      - name: Configure CMake
+        run: |
+          cmake --preset ${{ matrix.preset }} -DOpenMP_CXX_FLAGS="-openmp" -DOpenMP_C_FLAGS="-openmp"
+
+      - name: Build
+        run: |
+          cmake --build build --config ${{ matrix.config }} --parallel
+
+      - name: Prepare artifacts
+        run: |
+          mkdir artifacts
+          copy "build\${{ matrix.config }}\upsclr-plugin-ncnn-vulkan.dll" "artifacts\"
+          copy "build\${{ matrix.config }}\upsclr-ncnn-vulkan.exe" "artifacts\"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: >-
+            upsclr-plugin-ncnn-vulkan-${{ matrix.arch }}-${{ matrix.config }}
+          path: artifacts/
+          retention-days: 30
+
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download x64 Release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: upsclr-plugin-ncnn-vulkan-x64-Release
+          path: package/x64/
+
+      - name: Create release package
+        run: |
+          cd package
+          zip -r ../upsclr-plugin-ncnn-vulkan-binaries.zip .
+          cd ..
+
+      - name: Verify package structure
+        run: |
+          echo "Package contents:"
+          unzip -l upsclr-plugin-ncnn-vulkan-binaries.zip
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: upsclr-plugin-ncnn-vulkan-binaries
+          path: package/
+          retention-days: 90
+
+      - name: Upload to release (if release event)
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./upsclr-plugin-ncnn-vulkan-binaries.zip
+          asset_name: upsclr-plugin-ncnn-vulkan-binaries.zip
+          asset_content_type: application/zip
