@@ -40,18 +40,24 @@ jobs:
           echo "${{ github.workspace }}\vcpkg" >> $env:GITHUB_PATH
 
       - name: Setup vcpkg binary caching
+        shell: pwsh
+        env:
+          USERNAME: ${{ github.repository_owner }}
+          VCPKG_EXE: ${{ github.workspace }}\vcpkg\vcpkg.exe
+          FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+          VCPKG_BINARY_SOURCES: clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,readwrite
         run: |
-          & "$env:VCPKG_ROOT\vcpkg.exe" --version
-          & "$env:VCPKG_ROOT\vcpkg.exe" fetch nuget
-          $owner = "${{ github.repository_owner }}"
-          $src = "https://nuget.pkg.github.com/$owner/index.json"
-          & "$env:VCPKG_ROOT\vcpkg.exe" nuget add source $src `
-            -name "GitHubPackages" `
-            -username "${{ github.repository_owner }}" `
-            -password "${{ secrets.GH_PACKAGES_TOKEN }}" `
-            -storepasswordincleartext
-          echo "VCPKG_BINARY_SOURCES=clear;nuget,GitHubPackages,readwrite" >> `
-            $env:GITHUB_ENV
+          .$(${{ env.VCPKG_EXE }} fetch nuget) `
+            sources add `
+            -Source "${{ env.FEED_URL }}" `
+            -StorePasswordInClearText `
+            -Name GitHubPackages `
+            -UserName "${{ env.USERNAME }}" `
+            -Password "${{ secrets.GH_PACKAGES_TOKEN }}"
+          .$(${{ env.VCPKG_EXE }} fetch nuget) `
+            setapikey "${{ secrets.GH_PACKAGES_TOKEN }}" `
+            -Source "${{ env.FEED_URL }}"
+          echo "VCPKG_BINARY_SOURCES=${{ env.VCPKG_BINARY_SOURCES }}" >> $env:GITHUB_ENV
 
       - name: Setup CMake and Ninja
         uses: lukka/get-cmake@latest
