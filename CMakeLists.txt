@@ -18,7 +18,7 @@ project(realesrgan-ncnn-vulkan CXX)
 option(USE_STATIC_MOLTENVK "link moltenvk static library" OFF)
 
 find_package(Threads)
-find_package(OpenMP)
+find_package(OpenMP REQUIRED)
 
 find_package(Vulkan REQUIRED)
 if(Vulkan_GLSLANG_VALIDATOR_EXECUTABLE)
@@ -76,10 +76,8 @@ endmacro()
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
-if(OPENMP_FOUND)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-endif()
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 
 # enable global link time optimization
 cmake_policy(SET CMP0069 NEW)
@@ -126,7 +124,6 @@ add_executable(upsclr-ncnn-vulkan
 # Find packages
 find_package(glaze CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
-find_package(OpenMP REQUIRED)
 find_package(ncnn CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(cxxopts CONFIG REQUIRED)
@@ -166,9 +163,7 @@ if(USE_STATIC_MOLTENVK)
     )
 endif()
 
-if(OPENMP_FOUND)
-    target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
-endif()
+target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
 
 # Build the SPIR-V shaders
 add_dependencies(upsclr-ncnn-vulkan generate-spirv)
@@ -183,10 +178,7 @@ target_link_libraries(upsclr-ncnn-vulkan PRIVATE upsclr-plugin-ncnn-vulkan)
 target_compile_definitions(upsclr-plugin-ncnn-vulkan PRIVATE SPDLOG_USE_STD_FORMAT)
 target_compile_definitions(upsclr-ncnn-vulkan PRIVATE SPDLOG_USE_STD_FORMAT)
 
-if(OPENMP_FOUND)
-    target_link_libraries(upsclr-plugin-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
-    target_link_libraries(upsclr-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
-endif()
+target_link_libraries(upsclr-ncnn-vulkan PRIVATE OpenMP::OpenMP_CXX)
 
 # UTF-8 support for Windows
 if(WIN32)
