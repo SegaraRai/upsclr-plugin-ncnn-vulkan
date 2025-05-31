@@ -1,0 +1,127 @@
+---
+name: Build and Release
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    strategy:
+      matrix:
+        include:
+          - preset: windows-clang-x64
+            arch: x64
+            config: Release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: f26ec398c25c4980f33a50391f00a75f7ad62ef7
+
+      - name: Setup CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg_installed
+            ${{ env.VCPKG_ROOT }}/installed
+          key: >-
+            ${{ runner.os }}-vcpkg-${{ matrix.arch }}-${{
+            hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ matrix.arch }}-
+            ${{ runner.os }}-vcpkg-
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: >-
+            ${{ runner.os }}-cmake-build-${{ matrix.preset }}-${{
+            hashFiles('CMakeLists.txt', 'src/**/*.cpp', 'src/**/*.hpp') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-build-${{ matrix.preset }}-
+            ${{ runner.os }}-cmake-build-
+
+      - name: Configure CMake
+        run: |
+          cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: |
+          cmake --build build --config ${{ matrix.config }} --parallel
+
+      - name: Prepare artifacts
+        run: |
+          mkdir artifacts
+          copy "build\${{ matrix.config }}\upsclr-plugin-ncnn-vulkan.dll" ^
+            artifacts\
+          copy "build\${{ matrix.config }}\upsclr-ncnn-vulkan.exe" ^
+            artifacts\
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: upsclr-plugin-ncnn-vulkan-${{ matrix.arch }}
+          path: artifacts/
+          retention-days: 30
+
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'release' || github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download x64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: upsclr-plugin-ncnn-vulkan-x64
+          path: package/x64/
+
+      - name: Create release package
+        run: |
+          cd package
+          zip -r ../upsclr-plugin-ncnn-vulkan-binaries.zip .
+          cd ..
+
+      - name: Verify package structure
+        run: |
+          echo "Package contents:"
+          unzip -l upsclr-plugin-ncnn-vulkan-binaries.zip
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: upsclr-plugin-ncnn-vulkan-binaries
+          path: package/
+          retention-days: 90
+
+      - name: Upload to release (if release event)
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./upsclr-plugin-ncnn-vulkan-binaries.zip
+          asset_name: upsclr-plugin-ncnn-vulkan-binaries.zip
+          asset_content_type: application/zip
