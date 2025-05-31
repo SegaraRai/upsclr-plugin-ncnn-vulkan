@@ -56,6 +56,8 @@ jobs:
         run: |
           echo "LLVM_PATH=${{ steps.llvm.outputs.llvm-path }}" >> $env:GITHUB_ENV
           echo "OpenMP_ROOT=${{ steps.llvm.outputs.llvm-path }}" >> $env:GITHUB_ENV
+          echo "OpenMP_CXX_LIB_NAMES=libomp" >> $env:GITHUB_ENV
+          echo "OpenMP_C_LIB_NAMES=libomp" >> $env:GITHUB_ENV
 
       - name: Setup CMake and Ninja
         uses: lukka/get-cmake@latest
@@ -73,7 +75,7 @@ jobs:
 
       - name: Configure CMake
         run: |
-          cmake --preset ${{ matrix.preset }} -DOpenMP_CXX_FLAGS="-fopenmp" -DOpenMP_C_FLAGS="-fopenmp"
+          cmake --preset ${{ matrix.preset }} -DOpenMP_CXX_FLAGS="-fopenmp" -DOpenMP_C_FLAGS="-fopenmp" -DOpenMP_CXX_LIB_NAMES="libomp" -DOpenMP_C_LIB_NAMES="libomp"
 
       - name: Build
         run: |
