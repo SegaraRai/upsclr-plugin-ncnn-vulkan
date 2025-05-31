@@ -126,6 +126,7 @@ add_executable(upsclr-ncnn-vulkan
 # Find packages
 find_package(glaze CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_package(OpenMP REQUIRED)
 find_package(ncnn CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(cxxopts CONFIG REQUIRED)

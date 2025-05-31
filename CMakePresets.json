@@ -20,6 +20,14 @@
       "cacheVariables": {
         "CMAKE_C_COMPILER": "clang-cl.exe",
         "CMAKE_CXX_COMPILER": "clang-cl.exe",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+      }
+    },
+    {
+      "name": "windows-clang-x64-ci",
+      "inherits": "windows-clang-x64",
+      "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "x64-windows-static-release",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
       }
@@ -34,6 +42,11 @@
     {
       "name": "windows-clang-x64-release",
       "configurePreset": "windows-clang-x64",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-clang-x64-ci-release",
+      "configurePreset": "windows-clang-x64-ci",
       "configuration": "Release"
     }
   ]
