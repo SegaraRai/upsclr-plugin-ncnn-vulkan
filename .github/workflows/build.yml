@@ -50,6 +50,12 @@ jobs:
         uses: KyleMayes/install-llvm-action@v2
         with:
           version: "20"
+        id: llvm
+
+      - name: Configure OpenMP for LLVM
+        run: |
+          echo "LLVM_PATH=${{ steps.llvm.outputs.llvm-path }}" >> $env:GITHUB_ENV
+          echo "OpenMP_ROOT=${{ steps.llvm.outputs.llvm-path }}" >> $env:GITHUB_ENV
 
       - name: Setup CMake and Ninja
         uses: lukka/get-cmake@latest
@@ -67,7 +73,7 @@ jobs:
 
       - name: Configure CMake
         run: |
-          cmake --preset ${{ matrix.preset }}
+          cmake --preset ${{ matrix.preset }} -DOpenMP_CXX_FLAGS="-fopenmp" -DOpenMP_C_FLAGS="-fopenmp"
 
       - name: Build
         run: |
