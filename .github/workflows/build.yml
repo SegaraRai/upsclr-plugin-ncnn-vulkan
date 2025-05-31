@@ -48,9 +48,6 @@ jobs:
 
       - name: Setup CMake and Ninja
         uses: lukka/get-cmake@latest
-        with:
-          cmakeVersion: "~3.27.0"
-          ninjaVersion: "~1.11.0"
 
       - name: Cache CMake build
         uses: actions/cache@v4
